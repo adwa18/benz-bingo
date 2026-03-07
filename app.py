@@ -1599,6 +1599,7 @@ async def _bot_main():
             bot,
             allowed_updates=dp.resolve_used_update_types(),
             close_bot_session=True,
+            handle_signals=False,   # ← required when running in a non-main thread
         )
     finally:
         await bot.session.close()
@@ -1620,11 +1621,23 @@ def start_bot_thread():
     def _run():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        # Suppress the harmless "Task was destroyed but pending" warning
+        # that appears when Gunicorn shuts down the daemon thread mid-poll.
+        loop.set_exception_handler(lambda l, ctx: (
+            None if 'Task was destroyed' in ctx.get('message', '')
+            else l.default_exception_handler(ctx)
+        ))
         try:
             loop.run_until_complete(_bot_main())
         except Exception as exc:
             logger.error(f'[Bot] Fatal: {exc}')
         finally:
+            # Cancel remaining tasks cleanly before closing
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
             loop.close()
 
     t = threading.Thread(target=_run, daemon=True, name='TelegramBot')
