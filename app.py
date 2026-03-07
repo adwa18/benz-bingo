@@ -1,44 +1,98 @@
 """
-Benz Bingo — Flask Backend
-===========================
+Benz Bingo — Flask Backend  +  Telegram Bot (merged, single process)
+======================================================================
+Running both Flask and the aiogram bot in one process means you only
+need ONE free Render Web Service — no Background Worker required.
+
+How it works:
+  • Gunicorn starts with --workers 1  (critical — see Procfile)
+  • At module load time, start_bot_thread() spawns a daemon thread
+  • That thread owns its own asyncio event loop and runs the bot forever
+  • Flask handles HTTP on the main thread pool as normal
+
 Database: auto-detects from DATABASE_URL environment variable.
   • If DATABASE_URL starts with postgres → uses psycopg2 (PostgreSQL)
   • Otherwise                           → uses sqlite3  (local dev)
 
 Environment variables:
-  DATABASE_URL          — PostgreSQL connection string (set by Render automatically)
-                          e.g. postgresql://user:pass@host/dbname
+  DATABASE_URL          — PostgreSQL connection string (Render sets this automatically)
   TELEGRAM_BOT_TOKEN    — from @BotFather
   ADMIN_TG_IDS          — comma-separated Telegram user IDs
   WELCOME_BONUS         — ETB given to new users (default: 100)
+  INTERNAL_SECRET       — shared secret for /internal/notify endpoint
   PORT                  — HTTP port (default: 5000)
 
 Run locally:   python app.py
-Run on Render: gunicorn --bind 0.0.0.0:$PORT --workers 2 --threads 4 app:app
+Run on Render: gunicorn --bind 0.0.0.0:$PORT --workers 1 --threads 8 --timeout 120 app:app
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ workers=1 is REQUIRED
 """
 
+import asyncio
 import json
 import hashlib
 import hmac
+import logging
 import os
 import random
 import threading
 import time
 import uuid
+from datetime import datetime
+
+import aiohttp
+from aiogram import Bot, Dispatcher, F, Router
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
+from aiogram.filters import Command, CommandStart
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    Message,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+    WebAppInfo,
+)
 from flask import Flask, request, jsonify, g, send_from_directory
 from flask_cors import CORS
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s | %(levelname)-8s | %(name)s | %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+)
+logger = logging.getLogger('benz_bingo')
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
 app = Flask(__name__, static_folder='static')
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
-BOT_TOKEN      = os.environ.get('TELEGRAM_BOT_TOKEN', os.environ.get('BOT_TOKEN', ''))
-ADMIN_TG_IDS   = set(os.environ.get('ADMIN_TG_IDS', '').split(','))
-WELCOME_BONUS  = int(os.environ.get('WELCOME_BONUS', 100))
-HOUSE_CUT      = 0.10
-COUNTDOWN_SECS = 120
-CALL_INTERVAL  = 5
-BET_AMOUNTS    = [10, 50, 100, 200]
+BOT_TOKEN        = os.environ.get('TELEGRAM_BOT_TOKEN', os.environ.get('BOT_TOKEN', ''))
+ADMIN_TG_IDS_STR = os.environ.get('ADMIN_TG_IDS', '')
+ADMIN_TG_IDS     = set(ADMIN_TG_IDS_STR.split(',')) if ADMIN_TG_IDS_STR else set()
+ADMIN_TG_IDS_INT = {int(x) for x in ADMIN_TG_IDS if x.strip().isdigit()}
+WELCOME_BONUS    = int(os.environ.get('WELCOME_BONUS', 100))
+INTERNAL_SECRET  = os.environ.get('INTERNAL_SECRET', 'changeme-please')
+HOUSE_CUT        = 0.10
+COUNTDOWN_SECS   = 120
+CALL_INTERVAL    = 5
+BET_AMOUNTS      = [10, 50, 100, 200]
+REFERRAL_BONUS   = 50
+MIN_DEPOSIT      = 10
+MAX_DEPOSIT      = 5_000
+MIN_WITHDRAW     = 100
+PAYMENT_ACCOUNTS = (
+    "🏦 <b>CBE:</b>       <code>1000-123-456-789</code>  (Benz Bingo Ltd)\n"
+    "📱 <b>Telebirr:</b>  <code>0911-111-111</code>\n"
+    "📱 <b>M-Pesa:</b>    <code>0722-222-222</code>"
+)
+
+# Set at bot startup, used in referral links
+_bot_username: str = ''
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  DATABASE LAYER — auto-switches between SQLite (local) and PostgreSQL (prod)
@@ -868,8 +922,720 @@ def toggle_admin(uid):
 def health():
     return jsonify({'status': 'ok', 'db': DB_TYPE})
 
+# ── Internal notify endpoint (bot calls this to push Telegram messages) ────────
+@app.route('/internal/notify', methods=['POST'])
+def internal_notify():
+    if request.headers.get('X-Internal-Secret') != INTERNAL_SECRET:
+        return jsonify({'error': 'Unauthorized'}), 401
+    # Notification is handled by the bot thread; we just queue it
+    data   = request.json or {}
+    tg_id  = data.get('tg_id')
+    event  = data.get('event', '')
+    if not tg_id:
+        return jsonify({'error': 'tg_id required'}), 400
+    _notify_queue.put({'tg_id': int(tg_id), 'event': event, 'data': data})
+    return jsonify({'ok': True})
+
 # ══════════════════════════════════════════════════════════════════════════════
-#  ENTRY POINT
+#  TELEGRAM BOT — runs in a background daemon thread inside this same process
+#
+#  IMPORTANT: Gunicorn must use --workers 1
+#             Multiple workers = multiple bot polling instances = Telegram error
+# ══════════════════════════════════════════════════════════════════════════════
+
+import queue as _queue_module
+_notify_queue: _queue_module.Queue = _queue_module.Queue()
+
+# ── FSM States ────────────────────────────────────────────────────────────────
+class Registration(StatesGroup):
+    waiting_for_username = State()
+    waiting_for_phone    = State()
+
+class Deposit(StatesGroup):
+    waiting_for_amount  = State()
+    waiting_for_sms_ref = State()
+
+class Withdrawal(StatesGroup):
+    waiting_for_amount = State()
+    waiting_for_phone  = State()
+
+# ── Bot API helper (calls Flask REST API — same host, loopback) ───────────────
+async def bot_api(method: str, path: str, tg_id: int | None = None,
+                  body: dict | None = None,
+                  session: aiohttp.ClientSession | None = None) -> dict:
+    """
+    Call the local Flask API from inside the bot.
+    Uses localhost so traffic never leaves the machine — zero latency.
+    """
+    port    = int(os.environ.get('PORT', 5000))
+    base    = f'http://127.0.0.1:{port}'
+    headers = {'Content-Type': 'application/json'}
+    if tg_id:
+        headers['X-Tg-User'] = json.dumps({'id': tg_id})
+
+    own_session = session is None
+    if own_session:
+        session = aiohttp.ClientSession()
+    try:
+        async with session.request(method, base + path, json=body, headers=headers) as resp:
+            data = await resp.json(content_type=None)
+            if not resp.ok:
+                raise ValueError(data.get('error', f'API {resp.status}'))
+            return data
+    finally:
+        if own_session:
+            await session.close()
+
+# ── Notification helper ───────────────────────────────────────────────────────
+async def bot_notify(bot: Bot, tg_id: int, text: str) -> bool:
+    try:
+        await bot.send_message(chat_id=tg_id, text=text, parse_mode=ParseMode.HTML)
+        return True
+    except Exception as exc:
+        logger.warning(f'[notify] failed for {tg_id}: {exc}')
+        return False
+
+# ── Keyboards ─────────────────────────────────────────────────────────────────
+def kb_main() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text='🎮 Play Bingo')],
+            [KeyboardButton(text='💰 Deposit'),  KeyboardButton(text='💳 Withdraw')],
+            [KeyboardButton(text='📊 My Stats'), KeyboardButton(text='🏆 Leaderboard')],
+        ],
+        resize_keyboard=True,
+        input_field_placeholder='Choose an option…',
+    )
+
+def kb_cancel() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text='❌ Cancel')]],
+        resize_keyboard=True, one_time_keyboard=True,
+    )
+
+def kb_phone() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text='📱 Share Phone Number', request_contact=True)],
+            [KeyboardButton(text='⏭ Skip')],
+        ],
+        resize_keyboard=True, one_time_keyboard=True,
+    )
+
+def kb_webapp(label: str = '🎱 Open Benz Bingo', bet: int | None = None) -> InlineKeyboardMarkup:
+    port = int(os.environ.get('PORT', 5000))
+    base = os.environ.get('WEBAPP_URL', f'http://localhost:{port}')
+    url  = f'{base}?bet={bet}' if bet else base
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=label, web_app=WebAppInfo(url=url))
+    ]])
+
+def kb_bets(balance: int) -> InlineKeyboardMarkup:
+    rows = []
+    pair = []
+    for a in BET_AMOUNTS:
+        label = f'🪙 {a} ETB' + (' ✓' if balance >= a else ' 🔒')
+        pair.append(InlineKeyboardButton(text=label, callback_data=f'bet:{a}'))
+        if len(pair) == 2:
+            rows.append(pair); pair = []
+    if pair:
+        rows.append(pair)
+    rows.append([InlineKeyboardButton(text='❌ Cancel', callback_data='bet:cancel')])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+# ── Router ────────────────────────────────────────────────────────────────────
+bot_router = Router(name='benz_bingo')
+
+def admin_guard(handler):
+    async def _w(message: Message, *a, **kw):
+        if message.from_user.id not in ADMIN_TG_IDS_INT:
+            await message.answer('⛔ Admin access required.')
+            return
+        return await handler(message, *a, **kw)
+    _w.__name__ = handler.__name__
+    return _w
+
+# /start ──────────────────────────────────────────────────────────────────────
+@bot_router.message(CommandStart())
+async def cmd_start(message: Message, state: FSMContext, session: aiohttp.ClientSession):
+    await state.clear()
+    tg   = message.from_user
+    args = message.text.split()[1:]
+    ref  = int(args[0]) if args and args[0].isdigit() and int(args[0]) != tg.id else None
+    if ref:
+        await state.update_data(referrer_id=ref)
+    try:
+        res = await bot_api('POST', '/api/auth', tg_id=tg.id,
+                            body={'tg_user': {'id': tg.id, 'username': tg.username,
+                                              'first_name': tg.first_name}},
+                            session=session)
+    except Exception as exc:
+        await message.answer(f'⚠️ Server error: {exc}'); return
+
+    if res.get('status') == 'existing':
+        u = res['user']
+        await message.answer(
+            f"👋 Welcome back, <b>{u['username']}</b>!\n\n"
+            f"💰 Balance: <b>{u['balance']:,} ETB</b>\n"
+            f"🏆 Wins: {u['wins']}  ·  🎮 Games: {u['games_played']}",
+            reply_markup=kb_main(),
+        )
+    else:
+        suggested = res.get('suggested_username') or tg.first_name or 'Player'
+        await state.set_state(Registration.waiting_for_username)
+        await state.update_data(tg_id=str(tg.id))
+        await message.answer(
+            '🎱 <b>Welcome to Benz Bingo!</b>\n\n'
+            'Pick numbers · Mark your card · Shout <b>BINGO!</b>\n'
+            'Win up to <b>90% of the pot</b> every round 💰\n\n'
+            f'Choose a username (2–20 chars, no spaces):\n'
+            f'<i>Suggestion:</i> <code>{suggested}</code>',
+            reply_markup=kb_cancel(),
+        )
+
+# Registration FSM ────────────────────────────────────────────────────────────
+@bot_router.message(Registration.waiting_for_username, F.text)
+async def reg_username(message: Message, state: FSMContext, session: aiohttp.ClientSession):
+    if message.text in ('❌ Cancel', '/cancel'):
+        await state.clear()
+        await message.answer('Registration cancelled.', reply_markup=ReplyKeyboardRemove()); return
+    u = message.text.strip()
+    if len(u) < 2 or len(u) > 20 or ' ' in u:
+        await message.answer('⚠️ 2–20 chars, no spaces. Try again:'); return
+    data = await state.get_data()
+    try:
+        res  = await bot_api('POST', '/api/register', tg_id=int(data['tg_id']),
+                             body={'tg_id': data['tg_id'], 'username': u}, session=session)
+    except ValueError as exc:
+        await message.answer(f'⚠️ {exc}\nTry a different username:'); return
+    user = res['user']
+
+    # Referral bonus
+    ref = data.get('referrer_id')
+    if ref:
+        try:
+            ref_users = await bot_api('GET', '/api/admin/users', tg_id=int(data['tg_id']),
+                                     session=session)
+            ref_user  = next((x for x in ref_users if x['tg_id'] == str(ref)), None)
+            if ref_user:
+                await bot_api('POST', '/api/admin/funds', tg_id=ref,
+                              body={'username': ref_user['username'], 'amount': REFERRAL_BONUS},
+                              session=session)
+        except Exception:
+            pass
+
+    await state.set_state(Registration.waiting_for_phone)
+    await message.answer(
+        f"✅ <b>Account created!</b>\n\n"
+        f"Username: <b>{user['username']}</b>\n"
+        f"Welcome bonus: <b>100 ETB</b> 🎁\n\n"
+        "📱 Share your phone to enable deposits/withdrawals.\n"
+        "(Tap <b>⏭ Skip</b> to do this later.)",
+        reply_markup=kb_phone(),
+    )
+
+@bot_router.message(Registration.waiting_for_phone, F.contact)
+async def reg_phone(message: Message, state: FSMContext):
+    if message.contact.user_id != message.from_user.id:
+        await message.answer('⚠️ Share <b>your own</b> contact.'); return
+    await state.clear()
+    link = f'https://t.me/{_bot_username}?start={message.from_user.id}'
+    await message.answer(
+        f'✅ <b>Phone verified!</b>\n\n'
+        f'🔗 Referral link:\n<code>{link}</code>\n\n'
+        f'Earn <b>{REFERRAL_BONUS} ETB</b> per friend who joins! 🎉',
+        reply_markup=kb_main(),
+    )
+
+@bot_router.message(Registration.waiting_for_phone, F.text.in_({'⏭ Skip', '❌ Cancel'}))
+async def reg_skip(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("👍 You can add your phone later.\nLet's play!", reply_markup=kb_main())
+
+# /cancel  ────────────────────────────────────────────────────────────────────
+@bot_router.message(Command('cancel'))
+@bot_router.message(F.text == '❌ Cancel')
+async def cmd_cancel(message: Message, state: FSMContext):
+    cur = await state.get_state()
+    await state.clear()
+    txt = '✅ Cancelled.' if cur else 'Nothing to cancel.'
+    await message.answer(txt, reply_markup=kb_main())
+
+# /help ───────────────────────────────────────────────────────────────────────
+@bot_router.message(Command('help'))
+async def cmd_help(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer(
+        '🎱 <b>Benz Bingo — How to Play</b>\n\n'
+        '1. Tap 🎮 Play Bingo → choose bet (10/50/100/200 ETB)\n'
+        '2. Pick a lucky number 1–100\n'
+        '3. Get your unique 5×5 BINGO card\n'
+        '4. 2+ players join → 2-min countdown → GO!\n'
+        '5. Numbers called every 5 seconds\n'
+        '6. Tap called numbers to mark them\n'
+        '7. Complete row / column / diagonal → 🎉 BINGO!\n'
+        '8. Winner takes <b>90% of the pot</b>\n\n'
+        '<b>Commands:</b> /start /balance /stats /history /referral /cancel /help',
+    )
+
+# /balance ────────────────────────────────────────────────────────────────────
+@bot_router.message(Command('balance'))
+async def cmd_balance(message: Message, session: aiohttp.ClientSession):
+    try:
+        u = await bot_api('GET', '/api/user', tg_id=message.from_user.id, session=session)
+    except Exception as exc:
+        await message.answer(f'⚠️ {exc}'); return
+    await message.answer(
+        f"💰 <b>Wallet — {u['username']}</b>\n\n"
+        f"Balance:   <b>{u['balance']:,} ETB</b>\n"
+        f"Total won: {u['total_won']:,} ETB\n"
+        f"Total bet: {u['total_bet']:,} ETB",
+    )
+
+# 📊 My Stats ─────────────────────────────────────────────────────────────────
+@bot_router.message(Command('stats'))
+@bot_router.message(F.text == '📊 My Stats')
+async def cmd_stats(message: Message, session: aiohttp.ClientSession):
+    try:
+        u   = await bot_api('GET', '/api/user',    tg_id=message.from_user.id, session=session)
+        his = await bot_api('GET', '/api/history', tg_id=message.from_user.id, session=session)
+    except Exception as exc:
+        await message.answer(f'⚠️ {exc}'); return
+    gp  = u['games_played'] or 1
+    wr  = round(u['wins'] / gp * 100, 1)
+    rec = ''.join(
+        f"{'✅' if h['won'] else '❌'} {'+' if h['won'] else '−'}"
+        f"{h['prize_won'] if h['won'] else h['bet_amount']:,} ETB · {str(h['played_at'])[:10]}\n"
+        for h in his[:5]
+    ) or '<i>No games yet</i>'
+    await message.answer(
+        f"📊 <b>Stats — {u['username']}</b>\n\n"
+        f"💰 Balance:      <b>{u['balance']:,} ETB</b>\n"
+        f"🎮 Games played: {u['games_played']}\n"
+        f"🏆 Wins:         {u['wins']}\n"
+        f"📈 Win rate:     {wr}%\n"
+        f"💵 Total won:    {u['total_won']:,} ETB\n\n"
+        f"<b>Last 5 games:</b>\n{rec}",
+    )
+
+# /history ────────────────────────────────────────────────────────────────────
+@bot_router.message(Command('history'))
+async def cmd_history(message: Message, session: aiohttp.ClientSession):
+    try:
+        his = await bot_api('GET', '/api/history', tg_id=message.from_user.id, session=session)
+    except Exception as exc:
+        await message.answer(f'⚠️ {exc}'); return
+    if not his:
+        await message.answer('📜 No games yet — tap 🎮 Play Bingo to start!'); return
+    lines = [
+        f"{'🏆' if h['won'] else '💸'} <b>{'+' if h['won'] else '−'}"
+        f"{h['prize_won'] if h['won'] else h['bet_amount']:,} ETB</b>"
+        f" · {h['bet_amount']} bet · {str(h['played_at'])[:10]}"
+        for h in his[:20]
+    ]
+    await message.answer('📜 <b>Game History (last 20)</b>\n\n' + '\n'.join(lines))
+
+# /referral ───────────────────────────────────────────────────────────────────
+@bot_router.message(Command('referral'))
+async def cmd_referral(message: Message):
+    link = f'https://t.me/{_bot_username}?start={message.from_user.id}'
+    await message.answer(
+        f'🔗 <b>Your Referral Link</b>\n\n<code>{link}</code>\n\n'
+        f'Earn <b>{REFERRAL_BONUS} ETB</b> for every friend who joins and plays! 🎁',
+    )
+
+# 🏆 Leaderboard ──────────────────────────────────────────────────────────────
+@bot_router.message(F.text == '🏆 Leaderboard')
+async def cmd_leaderboard(message: Message, session: aiohttp.ClientSession):
+    try:
+        rows = await bot_api('GET', '/api/leaderboard', tg_id=message.from_user.id, session=session)
+    except Exception as exc:
+        await message.answer(f'⚠️ {exc}'); return
+    medals = ['🥇', '🥈', '🥉']
+    lines  = [
+        f"{medals[i] if i < 3 else f'{i+1}.'} <b>{u['username']}</b>"
+        f" — {u['wins']}W · {u['total_won']:,} ETB"
+        for i, u in enumerate(rows[:10])
+    ]
+    await message.answer('🏆 <b>Top 10 Players</b>\n\n' + '\n'.join(lines) if lines else 'No players yet.')
+
+# 🎮 Play Bingo ───────────────────────────────────────────────────────────────
+@bot_router.message(F.text == '🎮 Play Bingo')
+async def cmd_play(message: Message, session: aiohttp.ClientSession):
+    try:
+        u     = await bot_api('GET', '/api/user',  tg_id=message.from_user.id, session=session)
+        games = await bot_api('GET', '/api/games', tg_id=message.from_user.id, session=session)
+    except Exception as exc:
+        await message.answer(f'⚠️ {exc}'); return
+    counts: dict[int, int] = {b: 0 for b in BET_AMOUNTS}
+    for gm in games:
+        b = gm.get('bet_amount')
+        if b in counts and gm.get('status') in ('waiting', 'countdown'):
+            counts[b] += gm.get('player_count', 0)
+    lobby = '\n'.join(
+        f"  {'🟢' if counts[b] else '⚪'} <b>{b} ETB</b>  ({counts[b]} waiting)"
+        for b in BET_AMOUNTS
+    )
+    await message.answer(
+        f"🎯 <b>Choose Your Bet</b>\n\n"
+        f"💰 Balance: <b>{u['balance']:,} ETB</b>\n\n"
+        f"<b>Active lobbies:</b>\n{lobby}\n\n"
+        f"<i>Locked bets 🔒 need more balance.</i>",
+        reply_markup=kb_bets(u['balance']),
+    )
+
+@bot_router.callback_query(F.data.startswith('bet:'))
+async def cb_bet(call: CallbackQuery, session: aiohttp.ClientSession):
+    await call.answer()
+    raw = call.data.split(':', 1)[1]
+    if raw == 'cancel':
+        await call.message.edit_text('✅ Cancelled.'); return
+    amount = int(raw)
+    try:
+        u = await bot_api('GET', '/api/user', tg_id=call.from_user.id, session=session)
+    except Exception as exc:
+        await call.message.edit_text(f'⚠️ {exc}'); return
+    if u['balance'] < amount:
+        await call.message.edit_text(
+            f"⚠️ <b>Insufficient balance</b>\n\n"
+            f"You have <b>{u['balance']:,} ETB</b> but need <b>{amount} ETB</b>.\n\n"
+            "Use 💰 Deposit to top up.",
+        ); return
+    await call.message.edit_text(
+        f"🎲 <b>{amount} ETB Lobby</b>\n\n"
+        f"Prize: <b>90% of the pot</b>\n"
+        f"Countdown starts when 2+ players join.\n\n"
+        f"Tap below to pick your number and join!",
+        reply_markup=kb_webapp(f'🎱 Enter {amount} ETB Game', bet=amount),
+    )
+
+# 💰 Deposit ──────────────────────────────────────────────────────────────────
+@bot_router.message(F.text == '💰 Deposit')
+async def cmd_deposit(message: Message, state: FSMContext, session: aiohttp.ClientSession):
+    try:
+        u = await bot_api('GET', '/api/user', tg_id=message.from_user.id, session=session)
+    except Exception as exc:
+        await message.answer(f'⚠️ {exc}'); return
+    await state.set_state(Deposit.waiting_for_amount)
+    await message.answer(
+        f"💰 <b>Deposit Funds</b>\n\n"
+        f"Balance: <b>{u['balance']:,} ETB</b>\n\n"
+        f"Enter amount (min {MIN_DEPOSIT} · max {MAX_DEPOSIT:,} ETB):",
+        reply_markup=kb_cancel(),
+    )
+
+@bot_router.message(Deposit.waiting_for_amount, F.text)
+async def deposit_amount(message: Message, state: FSMContext):
+    if message.text in ('❌ Cancel', '/cancel'):
+        await state.clear()
+        await message.answer('Deposit cancelled.', reply_markup=kb_main()); return
+    try:
+        amt = float(message.text.replace(',', '').strip())
+    except ValueError:
+        await message.answer('⚠️ Enter a valid number.'); return
+    if amt < MIN_DEPOSIT:
+        await message.answer(f'⚠️ Minimum deposit: {MIN_DEPOSIT} ETB.'); return
+    if amt > MAX_DEPOSIT:
+        await message.answer(f'⚠️ Maximum deposit: {MAX_DEPOSIT:,} ETB.'); return
+    await state.update_data(deposit_amount=amt)
+    await state.set_state(Deposit.waiting_for_sms_ref)
+    await message.answer(
+        f"✅ Amount: <b>{amt:,.0f} ETB</b>\n\n"
+        f"<b>Send payment to:</b>\n{PAYMENT_ACCOUNTS}\n\n"
+        f"📌 <b>Reference:</b> <code>BB-{message.from_user.id}</code>\n\n"
+        "Reply with your <b>transaction reference / SMS code</b> after paying:",
+        reply_markup=kb_cancel(),
+    )
+
+@bot_router.message(Deposit.waiting_for_sms_ref, F.text)
+async def deposit_ref(message: Message, state: FSMContext):
+    if message.text in ('❌ Cancel', '/cancel'):
+        await state.clear()
+        await message.answer('Deposit cancelled.', reply_markup=kb_main()); return
+    data = await state.get_data()
+    amt  = data['deposit_amount']
+    ref  = message.text.strip()
+    await state.clear()
+    admin_txt = (
+        f"📥 <b>Deposit Request</b>\n\nUser: <code>{message.from_user.id}</code>"
+        f" (@{message.from_user.username or '—'})\n"
+        f"Amount: <b>{amt:,.0f} ETB</b>\nReference: <code>{ref}</code>\n"
+        f"Time: {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC\n\n"
+        f"✅ Approve: <code>/admindeposit {message.from_user.id} {amt:.0f}</code>"
+    )
+    for aid in ADMIN_TG_IDS_INT:
+        _notify_queue.put({'tg_id': aid, 'event': 'custom', 'data': {'message': admin_txt}})
+    await message.answer(
+        f"✅ <b>Deposit request submitted!</b>\n\nAmount: <b>{amt:,.0f} ETB</b>\n"
+        "Our team will credit your wallet within <b>30 minutes</b>. 🔔",
+        reply_markup=kb_main(),
+    )
+
+# 💳 Withdraw ─────────────────────────────────────────────────────────────────
+@bot_router.message(F.text == '💳 Withdraw')
+async def cmd_withdraw(message: Message, state: FSMContext, session: aiohttp.ClientSession):
+    try:
+        u = await bot_api('GET', '/api/user', tg_id=message.from_user.id, session=session)
+    except Exception as exc:
+        await message.answer(f'⚠️ {exc}'); return
+    if u['balance'] < MIN_WITHDRAW:
+        await message.answer(f"⚠️ Min withdrawal: <b>{MIN_WITHDRAW} ETB</b>.\n"
+                             f"Your balance: <b>{u['balance']:,} ETB</b>"); return
+    if u['games_played'] < 1:
+        await message.answer('⚠️ Play at least one game before withdrawing.'); return
+    await state.set_state(Withdrawal.waiting_for_amount)
+    await message.answer(
+        f"💳 <b>Withdraw Funds</b>\n\nAvailable: <b>{u['balance']:,} ETB</b>\n"
+        f"Min: {MIN_WITHDRAW:,} ETB · Processing: up to 24h\n\nEnter amount:",
+        reply_markup=kb_cancel(),
+    )
+
+@bot_router.message(Withdrawal.waiting_for_amount, F.text)
+async def withdraw_amount(message: Message, state: FSMContext, session: aiohttp.ClientSession):
+    if message.text in ('❌ Cancel', '/cancel'):
+        await state.clear()
+        await message.answer('Withdrawal cancelled.', reply_markup=kb_main()); return
+    try:
+        amt = float(message.text.replace(',', '').strip())
+    except ValueError:
+        await message.answer('⚠️ Enter a valid number.'); return
+    try:
+        u = await bot_api('GET', '/api/user', tg_id=message.from_user.id, session=session)
+    except Exception as exc:
+        await message.answer(f'⚠️ {exc}'); return
+    if amt < MIN_WITHDRAW:
+        await message.answer(f'⚠️ Minimum: {MIN_WITHDRAW} ETB.'); return
+    if amt > u['balance']:
+        await message.answer(f"⚠️ Insufficient. Available: {u['balance']:,} ETB."); return
+    await state.update_data(withdraw_amount=amt)
+    await state.set_state(Withdrawal.waiting_for_phone)
+    await message.answer(
+        f"📱 Phone number to receive <b>{amt:,.0f} ETB</b>:\n"
+        f"Format: <code>09XXXXXXXX</code>",
+        reply_markup=kb_cancel(),
+    )
+
+@bot_router.message(Withdrawal.waiting_for_phone, F.text)
+async def withdraw_phone(message: Message, state: FSMContext):
+    if message.text in ('❌ Cancel', '/cancel'):
+        await state.clear()
+        await message.answer('Withdrawal cancelled.', reply_markup=kb_main()); return
+    data  = await state.get_data()
+    amt   = data['withdraw_amount']
+    phone = message.text.strip()
+    await state.clear()
+    admin_txt = (
+        f"💸 <b>Withdrawal Request</b>\n\nUser: <code>{message.from_user.id}</code>"
+        f" (@{message.from_user.username or '—'})\n"
+        f"Amount: <b>{amt:,.0f} ETB</b>\nPhone: <code>{phone}</code>\n"
+        f"Time: {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC\n\n"
+        f"✅ Approve: <code>/adminwithdraw {message.from_user.id} {amt:.0f}</code>"
+    )
+    for aid in ADMIN_TG_IDS_INT:
+        _notify_queue.put({'tg_id': aid, 'event': 'custom', 'data': {'message': admin_txt}})
+    await message.answer(
+        f"✅ <b>Withdrawal request received!</b>\n\nAmount: <b>{amt:,.0f} ETB</b>\n"
+        "Processed within <b>24 hours</b>. 🔔",
+        reply_markup=kb_main(),
+    )
+
+# Admin commands ──────────────────────────────────────────────────────────────
+@bot_router.message(Command('admin'))
+@admin_guard
+async def cmd_admin(message: Message, session: aiohttp.ClientSession):
+    try:
+        s = await bot_api('GET', '/api/admin/stats', tg_id=message.from_user.id, session=session)
+    except Exception as exc:
+        await message.answer(f'⚠️ {exc}'); return
+    await message.answer(
+        f"⚙️ <b>Admin Dashboard</b>\n\n"
+        f"👥 Users: {s['total_users']}  🎮 Games: {s['total_games']}\n"
+        f"🔴 Active: {s['active_games']}  ✅ Finished: {s['finished_games']}\n"
+        f"💰 Prizes paid: {s['total_prizes']:,} ETB\n\n"
+        f"<b>Commands:</b>\n"
+        f"/admindeposit &lt;tg_id&gt; &lt;amount&gt;\n"
+        f"/adminwithdraw &lt;tg_id&gt; &lt;amount&gt;\n"
+        f"/adminend &lt;game_id&gt;\n"
+        f"/adminmsg &lt;tg_id&gt; &lt;text&gt;\n"
+        f"/adminbroadcast &lt;text&gt;",
+    )
+
+@bot_router.message(Command('admindeposit'))
+@admin_guard
+async def cmd_adep(message: Message, session: aiohttp.ClientSession):
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 3 or not parts[1].isdigit():
+        await message.answer('Usage: /admindeposit &lt;tg_id&gt; &lt;amount&gt;'); return
+    tid, amt = int(parts[1]), float(parts[2])
+    try:
+        users  = await bot_api('GET', '/api/admin/users', tg_id=message.from_user.id, session=session)
+        target = next((u for u in users if u['tg_id'] == str(tid)), None)
+        if not target: await message.answer('⚠️ User not found.'); return
+        res = await bot_api('POST', '/api/admin/funds', tg_id=message.from_user.id,
+                            body={'username': target['username'], 'amount': int(amt)}, session=session)
+        await message.answer(f"✅ +{amt:,.0f} ETB → <b>{target['username']}</b>\nBalance: {res['new_balance']:,} ETB")
+        _notify_queue.put({'tg_id': tid, 'event': 'deposit_approved', 'data': {'amount': amt, 'new_balance': res['new_balance']}})
+    except Exception as exc:
+        await message.answer(f'⚠️ {exc}')
+
+@bot_router.message(Command('adminwithdraw'))
+@admin_guard
+async def cmd_awdraw(message: Message, session: aiohttp.ClientSession):
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 3 or not parts[1].isdigit():
+        await message.answer('Usage: /adminwithdraw &lt;tg_id&gt; &lt;amount&gt;'); return
+    tid, amt = int(parts[1]), float(parts[2])
+    try:
+        users  = await bot_api('GET', '/api/admin/users', tg_id=message.from_user.id, session=session)
+        target = next((u for u in users if u['tg_id'] == str(tid)), None)
+        if not target: await message.answer('⚠️ User not found.'); return
+        res = await bot_api('POST', '/api/admin/funds', tg_id=message.from_user.id,
+                            body={'username': target['username'], 'amount': -int(amt)}, session=session)
+        await message.answer(f"✅ Withdrawal {amt:,.0f} ETB confirmed for <b>{target['username']}</b>.\nBalance: {res['new_balance']:,} ETB")
+        _notify_queue.put({'tg_id': tid, 'event': 'custom',
+                          'data': {'message': f"✅ <b>Withdrawal Processed!</b>\n{amt:,.0f} ETB sent.\nBalance: <b>{res['new_balance']:,} ETB</b>"}})
+    except Exception as exc:
+        await message.answer(f'⚠️ {exc}')
+
+@bot_router.message(Command('adminend'))
+@admin_guard
+async def cmd_aend(message: Message, session: aiohttp.ClientSession):
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2: await message.answer('Usage: /adminend &lt;game_id&gt;'); return
+    try:
+        res = await bot_api('POST', f'/api/admin/games/{parts[1].strip()}/finish',
+                            tg_id=message.from_user.id, session=session)
+        await message.answer(f"✅ Game ended. {res.get('refunded', 0)} player(s) refunded.")
+    except Exception as exc:
+        await message.answer(f'⚠️ {exc}')
+
+@bot_router.message(Command('adminmsg'))
+@admin_guard
+async def cmd_amsg(message: Message):
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 3 or not parts[1].isdigit():
+        await message.answer('Usage: /adminmsg &lt;tg_id&gt; &lt;text&gt;'); return
+    _notify_queue.put({'tg_id': int(parts[1]), 'event': 'custom',
+                       'data': {'message': f"📢 <b>Admin message:</b>\n\n{parts[2]}"}})
+    await message.answer('✅ Message queued.')
+
+@bot_router.message(Command('adminbroadcast'))
+@admin_guard
+async def cmd_abcast(message: Message, session: aiohttp.ClientSession):
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2: await message.answer('Usage: /adminbroadcast &lt;text&gt;'); return
+    try:
+        users = await bot_api('GET', '/api/admin/users', tg_id=message.from_user.id, session=session)
+    except Exception as exc:
+        await message.answer(f'⚠️ {exc}'); return
+    for u in users:
+        _notify_queue.put({'tg_id': int(u['tg_id']), 'event': 'custom',
+                           'data': {'message': f"📣 <b>Announcement</b>\n\n{parts[1]}"}})
+    await message.answer(f"📣 Broadcast queued for {len(users)} users.")
+
+# ── Notification drain task ───────────────────────────────────────────────────
+async def _drain_notify_queue(bot: Bot):
+    """
+    Runs as an asyncio task inside the bot's event loop.
+    Drains the thread-safe queue that Flask route handlers write to.
+    """
+    event_map = {
+        'win':               lambda d: f"🏆 <b>BINGO! You won!</b>\n\n+{d.get('prize',0):,} ETB added to your wallet! 🎱",
+        'game_start':        lambda d: '🔔 <b>Your game is starting!</b>\nOpen the app and mark your card!',
+        'deposit_approved':  lambda d: f"✅ <b>Deposit Approved!</b>\n\n<b>{d.get('amount',0):,.0f} ETB</b> added.\nBalance: <b>{d.get('new_balance',0):,} ETB</b>",
+        'custom':            lambda d: d.get('message', ''),
+    }
+    while True:
+        await asyncio.sleep(0.25)
+        while not _notify_queue.empty():
+            try:
+                item  = _notify_queue.get_nowait()
+                tg_id = item['tg_id']
+                event = item['event']
+                data  = item['data']
+                fn    = event_map.get(event)
+                if fn:
+                    text = fn(data)
+                    if text:
+                        await bot_notify(bot, tg_id, text)
+            except Exception as exc:
+                logger.warning(f'[notify_drain] {exc}')
+
+# ── aiohttp middleware to inject shared session ───────────────────────────────
+async def _session_middleware(handler, event, data):
+    async with aiohttp.ClientSession(
+        timeout=aiohttp.ClientTimeout(total=10)
+    ) as session:
+        data['session'] = session
+        return await handler(event, data)
+
+# ── Bot main coroutine ────────────────────────────────────────────────────────
+async def _bot_main():
+    global _bot_username
+    if not BOT_TOKEN:
+        logger.warning('[Bot] No BOT_TOKEN set — bot will not start.')
+        return
+
+    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    dp  = Dispatcher(storage=MemoryStorage())
+
+    # Inject aiohttp session into every handler via middleware
+    dp.update.middleware(_session_middleware)
+    dp.include_router(bot_router)
+
+    # Cache bot username
+    me = await bot.get_me()
+    _bot_username = me.username
+    logger.info(f'[Bot] @{_bot_username} started (polling)')
+
+    # Delete any stale webhook so polling works
+    await bot.delete_webhook(drop_pending_updates=True)
+
+    # Start notification drain as background task
+    asyncio.create_task(_drain_notify_queue(bot))
+
+    try:
+        await dp.start_polling(
+            bot,
+            allowed_updates=dp.resolve_used_update_types(),
+            close_bot_session=True,
+        )
+    finally:
+        await bot.session.close()
+        logger.info('[Bot] Polling stopped.')
+
+# ── Thread launcher (called once at module load) ──────────────────────────────
+_bot_thread_started = False
+
+def start_bot_thread():
+    """
+    Starts the aiogram bot in a dedicated daemon thread with its own event loop.
+    Called once at module load — Gunicorn --workers 1 ensures this happens exactly once.
+    """
+    global _bot_thread_started
+    if _bot_thread_started:
+        return
+    _bot_thread_started = True
+
+    def _run():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(_bot_main())
+        except Exception as exc:
+            logger.error(f'[Bot] Fatal: {exc}')
+        finally:
+            loop.close()
+
+    t = threading.Thread(target=_run, daemon=True, name='TelegramBot')
+    t.start()
+    logger.info('[Bot] Daemon thread launched.')
+
+# ── Start the bot when this module is imported by Gunicorn ───────────────────
+start_bot_thread()
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  ENTRY POINT  (python app.py — local dev only)
 # ══════════════════════════════════════════════════════════════════════════════
 if __name__ == '__main__':
     init_db()
