@@ -110,11 +110,12 @@ PH        = '%s' if DB_TYPE == 'postgres' else '?'   # placeholder character
 print(f'[DB] Using {"PostgreSQL" if DB_TYPE == "postgres" else "SQLite"} '
       f'({"prod" if DB_TYPE == "postgres" else "local dev"})')
 
-# ── PostgreSQL connection pool (only used when DB_TYPE == 'postgres') ─────────
+# ── PostgreSQL driver imports ─────────────────────────────────────────────────
 if DB_TYPE == 'postgres':
     import psycopg2
     import psycopg2.extras
     import psycopg2.pool
+    import psycopg2.extensions
     _pg_pool = psycopg2.pool.ThreadedConnectionPool(
         minconn=1, maxconn=10, dsn=_DATABASE_URL
     )
@@ -122,11 +123,36 @@ else:
     import sqlite3 as _sqlite3
     _pg_pool = None
 
-# ── Generic connection helpers ─────────────────────────────────────────────────
+# ── Connection helpers ────────────────────────────────────────────────────────
+def _new_pg_conn():
+    """Create a brand-new PostgreSQL connection (bypasses pool)."""
+    conn = psycopg2.connect(_DATABASE_URL)
+    conn.autocommit = False
+    return conn
+
+def _conn_is_alive(conn) -> bool:
+    """Check if a psycopg2 connection is still usable."""
+    try:
+        conn.cursor().execute('SELECT 1')
+        return True
+    except Exception:
+        return False
+
 def _get_conn():
-    """Return a raw DB connection. Caller is responsible for returning it."""
+    """Get a connection from the pool; replace it if it is stale."""
     if DB_TYPE == 'postgres':
-        return _pg_pool.getconn()
+        conn = _pg_pool.getconn()
+        # If connection is broken, discard it and open a fresh one
+        if conn.closed or not _conn_is_alive(conn):
+            logger.warning('[DB] Stale connection detected — replacing.')
+            try:
+                _pg_pool.putconn(conn, close=True)
+            except Exception:
+                pass
+            conn = _new_pg_conn()
+        else:
+            conn.autocommit = False
+        return conn
     else:
         conn = _sqlite3.connect(SQLITE_DB, check_same_thread=False)
         conn.row_factory = _sqlite3.Row
@@ -134,140 +160,126 @@ def _get_conn():
         conn.execute('PRAGMA foreign_keys=ON')
         return conn
 
-def _release_conn(conn):
+def _release_conn(conn, close=False):
+    """Return a connection to the pool (or close it if it is broken)."""
     if DB_TYPE == 'postgres':
-        _pg_pool.putconn(conn)
+        try:
+            _pg_pool.putconn(conn, close=close)
+        except Exception:
+            pass
     else:
         conn.close()
 
-# ── Flask per-request connection (via g) ──────────────────────────────────────
+# ── Flask per-request connection ──────────────────────────────────────────────
 def get_db():
-    """Return the per-request DB connection (stored in Flask g)."""
+    """Return the per-request DB connection, stored in Flask g."""
     if '_db' not in g:
         g._db = _get_conn()
-        if DB_TYPE == 'postgres':
-            g._db.autocommit = False
     return g._db
 
 @app.teardown_appcontext
 def close_db(exc):
     conn = g.pop('_db', None)
-    if conn is not None:
-        if DB_TYPE == 'postgres':
+    if conn is None:
+        return
+    if DB_TYPE == 'postgres':
+        broken = getattr(conn, 'closed', False)
+        try:
             if exc:
                 conn.rollback()
             else:
                 conn.commit()
-            _pg_pool.putconn(conn)
-        else:
-            conn.close()
+        except Exception:
+            broken = True
+        _release_conn(conn, close=broken)
+    else:
+        conn.close()
 
 def _cursor(conn):
-    """Return a dict-like cursor appropriate for the DB type."""
+    """Return a dict-aware cursor for the current DB type."""
     if DB_TYPE == 'postgres':
         return conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     else:
         conn.row_factory = _sqlite3.Row
         return conn.cursor()
 
-def _row_to_dict(row):
-    if row is None:
-        return None
-    if DB_TYPE == 'postgres':
-        return dict(row)
-    else:
-        return dict(row)
+# ── Public query helpers ──────────────────────────────────────────────────────
+def _pg_sql(sql: str) -> str:
+    """Convert SQLite-style ? placeholders to psycopg2 %s."""
+    return sql.replace('?', '%s') if DB_TYPE == 'postgres' else sql
 
-# ── Public query helpers ───────────────────────────────────────────────────────
 def query_db(sql, args=(), one=False):
-    """Run a SELECT and return list of dicts (or one dict if one=True)."""
-    # Replace ? with %s for postgres
-    if DB_TYPE == 'postgres':
-        sql = sql.replace('?', '%s')
+    """SELECT → list of dicts (or one dict when one=True)."""
     conn = get_db()
     cur  = _cursor(conn)
-    cur.execute(sql, args)
-    rows = cur.fetchall()
-    if DB_TYPE == 'postgres':
-        result = [dict(r) for r in rows]
-    else:
-        result = [dict(r) for r in rows]
-    return (_row_to_dict(rows[0]) if rows else None) if one else result
+    cur.execute(_pg_sql(sql), args)
+    rows = [dict(r) for r in cur.fetchall()]
+    return (rows[0] if rows else None) if one else rows
 
 def execute_db(sql, args=()):
-    """Run an INSERT/UPDATE/DELETE. Returns lastrowid."""
-    if DB_TYPE == 'postgres':
-        sql = sql.replace('?', '%s')
-        # PostgreSQL RETURNING id for INSERT
-        if sql.strip().upper().startswith('INSERT') and 'RETURNING' not in sql.upper():
-            sql = sql + ' RETURNING id'
+    """INSERT / UPDATE / DELETE. Returns inserted row id for INSERTs."""
+    sql = _pg_sql(sql)
+    if DB_TYPE == 'postgres' and sql.strip().upper().startswith('INSERT')             and 'RETURNING' not in sql.upper():
+        sql = sql + ' RETURNING id'
     conn = get_db()
     cur  = _cursor(conn)
     cur.execute(sql, args)
-    if DB_TYPE == 'postgres':
-        conn.commit()
-        if sql.strip().upper().startswith('INSERT'):
-            row = cur.fetchone()
-            return row['id'] if row else None
-        conn.commit()
-        return None
-    else:
-        conn.commit()
-        return cur.lastrowid
+    conn.commit()
+    if DB_TYPE == 'postgres' and sql.strip().upper().startswith('INSERT'):
+        row = cur.fetchone()
+        return dict(row)['id'] if row else None
+    return cur.lastrowid if DB_TYPE != 'postgres' else None
 
 def execute_many(statements):
-    """
-    Run multiple SQL statements in one transaction.
-    statements: list of (sql, args) tuples.
-    Returns last cursor.
-    """
+    """Run multiple statements in one transaction."""
     conn = get_db()
     cur  = _cursor(conn)
-    last_result = None
     for sql, args in statements:
-        if DB_TYPE == 'postgres':
-            sql = sql.replace('?', '%s')
-        cur.execute(sql, args)
-        last_result = cur
+        cur.execute(_pg_sql(sql) if DB_TYPE == 'postgres' else sql, args)
     conn.commit()
-    return last_result
+    return cur
 
-# ── Standalone connection (for GameEngine thread — no Flask context) ───────────
+# ── Standalone connection — GameEngine thread (no Flask context) ───────────────
 class StandaloneDB:
-    """Context manager for DB operations outside Flask app context."""
+    """
+    Context manager for DB operations that run outside Flask request context
+    (e.g. the GameEngine background thread).
+    Opens its own connection; does NOT use Flask g or the request-scoped pool.
+    """
     def __init__(self):
         self.conn = None
 
     def __enter__(self):
         self.conn = _get_conn()
-        if DB_TYPE == 'postgres':
-            self.conn.autocommit = False
         return self
 
     def __exit__(self, exc_type, *_):
-        if exc_type:
-            self.conn.rollback()
-        else:
-            self.conn.commit()
-        _release_conn(self.conn)
+        if self.conn is None:
+            return
+        broken = getattr(self.conn, 'closed', False)
+        try:
+            if exc_type:
+                self.conn.rollback()
+            else:
+                self.conn.commit()
+        except Exception:
+            broken = True
+        _release_conn(self.conn, close=broken)
+        self.conn = None
 
     def query(self, sql, args=()):
-        if DB_TYPE == 'postgres':
-            sql = sql.replace('?', '%s')
         cur = _cursor(self.conn)
-        cur.execute(sql, args)
-        rows = cur.fetchall()
-        return [dict(r) for r in rows]
+        cur.execute(_pg_sql(sql), args)
+        return [dict(r) for r in cur.fetchall()]
 
     def one(self, sql, args=()):
         rows = self.query(sql, args)
         return rows[0] if rows else None
 
     def run(self, sql, args=()):
-        if DB_TYPE == 'postgres':
-            sql = sql.replace('?', '%s')
-            if sql.strip().upper().startswith('INSERT') and 'RETURNING' not in sql.upper():
-                sql = sql + ' RETURNING id'
+        sql = _pg_sql(sql)
+        if DB_TYPE == 'postgres' and sql.strip().upper().startswith('INSERT')                 and 'RETURNING' not in sql.upper():
+            sql = sql + ' RETURNING id'
         cur = _cursor(self.conn)
         cur.execute(sql, args)
         if DB_TYPE == 'postgres' and sql.strip().upper().startswith('INSERT'):
@@ -1590,6 +1602,10 @@ async def _bot_main():
 
     # Delete any stale webhook so polling works
     await bot.delete_webhook(drop_pending_updates=True)
+
+    # Brief pause so any previous instance (from a rolling redeploy) has time
+    # to release its getUpdates session before we start polling.
+    await asyncio.sleep(3)
 
     # Start notification drain as background task
     asyncio.create_task(_drain_notify_queue(bot))
