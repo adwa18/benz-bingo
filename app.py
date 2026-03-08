@@ -131,26 +131,29 @@ def _new_pg_conn():
     return conn
 
 def _conn_is_alive(conn) -> bool:
-    """Check if a psycopg2 connection is still usable."""
-    try:
-        conn.cursor().execute('SELECT 1')
-        return True
-    except Exception:
+    """
+    Check if a psycopg2 connection is usable without executing a query.
+    Using STATUS_READY avoids starting a transaction, which would make
+    the subsequent conn.autocommit = False raise ProgrammingError.
+    """
+    if conn.closed:
         return False
+    # STATUS_READY (1) = idle, not in a transaction — safe to use
+    return conn.status == psycopg2.extensions.STATUS_READY
 
 def _get_conn():
-    """Get a connection from the pool; replace it if it is stale."""
+    """Get a connection from the pool; replace it silently if stale."""
     if DB_TYPE == 'postgres':
         conn = _pg_pool.getconn()
-        # If connection is broken, discard it and open a fresh one
-        if conn.closed or not _conn_is_alive(conn):
-            logger.warning('[DB] Stale connection detected — replacing.')
+        if not _conn_is_alive(conn):
+            logger.warning('[DB] Stale connection — replacing.')
             try:
                 _pg_pool.putconn(conn, close=True)
             except Exception:
                 pass
             conn = _new_pg_conn()
         else:
+            # Only set autocommit when connection is STATUS_READY (no active tx)
             conn.autocommit = False
         return conn
     else:
