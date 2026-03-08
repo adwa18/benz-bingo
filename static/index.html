@@ -514,7 +514,11 @@ body::before {
 ══════════════════════════════════════════════════════════ */
 #screen-game {
   padding:0 !important;
-  display:flex; flex-direction:column;
+  /* display is controlled by .screen / .screen.active — do NOT set display:flex here */
+}
+#screen-game.active {
+  display:flex !important;
+  flex-direction:column;
 }
 .game-top {
   flex:0 0 50%; overflow:hidden;
@@ -771,6 +775,7 @@ body::before {
             <div id="welcome-greeting" style="font-size:17px;font-weight:700;color:var(--text)">Welcome to Benz Bingo!</div>
             <div style="font-size:12px;color:var(--text2);margin-top:4px;line-height:1.7">Pick your numbers · Mark your card · Shout BINGO!<br>Bet 10–200 ETB and win big prizes every round.</div>
           </div>
+          <div id="welcome-error" style="display:none;background:rgba(220,50,50,.15);border:1px solid rgba(220,50,50,.4);border-radius:8px;padding:10px 14px;font-size:12px;color:#ff6b6b;margin-bottom:10px;line-height:1.5;text-align:left"></div>
           <button class="btn btn-gold" id="btn-welcome" onclick="handleWelcomeClick()">START PLAYING →</button>
         </div>
       </div>
@@ -797,22 +802,22 @@ body::before {
       <div class="card card-gold fade-in">
         <div class="card-title">🎯 Choose Your Bet</div>
         <div class="bet-grid" id="bet-grid">
-          <div class="bet-card" onclick="selectBet(10,this)">
+          <div class="bet-card" data-amount="10" onclick="selectBet(10,this)">
             <div class="bet-amount">10</div>
             <div class="bet-etb">ETB</div>
             <div class="bet-players"><span class="dot" style="color:var(--green)"></span><span id="bp-10">0</span> waiting</div>
           </div>
-          <div class="bet-card" onclick="selectBet(50,this)">
+          <div class="bet-card" data-amount="50" onclick="selectBet(50,this)">
             <div class="bet-amount">50</div>
             <div class="bet-etb">ETB</div>
             <div class="bet-players"><span class="dot" style="color:var(--green)"></span><span id="bp-50">0</span> waiting</div>
           </div>
-          <div class="bet-card" onclick="selectBet(100,this)">
+          <div class="bet-card" data-amount="100" onclick="selectBet(100,this)">
             <div class="bet-amount">100</div>
             <div class="bet-etb">ETB</div>
             <div class="bet-players"><span class="dot" style="color:var(--green)"></span><span id="bp-100">0</span> waiting</div>
           </div>
-          <div class="bet-card" onclick="selectBet(200,this)">
+          <div class="bet-card" data-amount="200" onclick="selectBet(200,this)">
             <div class="bet-amount">200</div>
             <div class="bet-etb">ETB</div>
             <div class="bet-players"><span class="dot" style="color:var(--green)"></span><span id="bp-200">0</span> waiting</div>
@@ -970,11 +975,24 @@ body::before {
   <!-- FOOTER -->
   <div id="footer" style="display:none">
     <div class="footer-left"></div>
-    <div class="footer-brand">Created by <span>Benz Bingo</span></div>
+    <div class="footer-brand">Created by <a href="tel:0913252238" style="color:var(--gold);text-decoration:none;font-weight:700">Benzion Creatives</a></div>
     <div class="theme-toggle" id="theme-toggle" onclick="toggleTheme()"></div>
   </div>
 
 </div><!-- /#app -->
+
+<!-- Leave Game Modal -->
+<div id="leave-modal" style="display:none;position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.7);align-items:center;justify-content:center;padding:20px">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:24px;max-width:280px;width:100%;text-align:center">
+    <div style="font-size:28px;margin-bottom:10px">⚠️</div>
+    <div style="font-weight:700;font-size:16px;color:var(--text);margin-bottom:8px">Leave Game?</div>
+    <div style="font-size:13px;color:var(--text2);margin-bottom:20px;line-height:1.5">You may forfeit your bet. Your spot will be lost.</div>
+    <div style="display:flex;gap:10px">
+      <button class="btn btn-ghost" style="flex:1;padding:10px" onclick="doLeave(false)">Cancel</button>
+      <button class="btn" style="flex:1;padding:10px;background:var(--red);color:#fff;border-color:var(--red)" onclick="doLeave(true)">Leave</button>
+    </div>
+  </div>
+</div>
 
 <!-- Bingo Win Overlay -->
 <div id="bingo-overlay">
@@ -1061,6 +1079,28 @@ window.addEventListener('DOMContentLoaded', async () => {
   if (saved === 'light') applyTheme(true, false);
   else document.getElementById('theme-toggle')?.classList.remove('on');
 
+  // Try silent auth first — skip welcome screen for returning users
+  try {
+    const res = await api('POST', '/api/auth', { tg_user: S.tgUser });
+    if (res.status === 'existing') {
+      S.user = res.user;
+      onLoggedIn();
+      // Handle ?bet=N deep link
+      const urlBet = parseInt(new URLSearchParams(location.search).get('bet'));
+      if (urlBet && [10,50,100,200].includes(urlBet)) {
+        setTimeout(() => {
+          const card = document.querySelector(`.bet-card[data-amount="${urlBet}"]`);
+          if (card) selectBet(urlBet, card);
+        }, 200);
+      }
+      return; // skip welcome screen entirely
+    } else if (res.status === 'new') {
+      // Pre-fill username for faster registration
+      document.getElementById('input-username').value = res.suggested_username || '';
+    }
+  } catch (_) {
+    // Network error — fall through to welcome screen, user can retry manually
+  }
   showScreen('screen-welcome');
 });
 
@@ -1069,22 +1109,39 @@ window.addEventListener('DOMContentLoaded', async () => {
 ══════════════════════════════════════════════════════════ */
 async function handleWelcomeClick() {
   const btn = document.getElementById('btn-welcome');
-  btn.textContent = 'Checking…'; btn.disabled = true;
+  btn.textContent = '⏳ Connecting…'; btn.disabled = true;
+
+  // Show persistent error banner so user can see what went wrong
+  const errEl = document.getElementById('welcome-error');
+  if (errEl) errEl.style.display = 'none';
+
   try {
     const res = await api('POST', '/api/auth', { tg_user: S.tgUser });
     if (res.status === 'existing') {
       S.user = res.user;
       onLoggedIn();
+      // If opened from bot with ?bet=N, pre-select that bet
+      const urlBet = parseInt(new URLSearchParams(location.search).get('bet'));
+      if (urlBet && [10,50,100,200].includes(urlBet)) {
+        setTimeout(() => {
+          const card = document.querySelector(`.bet-card[data-amount="${urlBet}"]`);
+          if (card) selectBet(urlBet, card);
+        }, 200);
+      }
     } else {
-      // New user
+      // New user — pre-fill suggested username
       document.getElementById('input-username').value = res.suggested_username || '';
       showScreen('screen-register');
     }
   } catch (e) {
-    toast('Connection error: ' + e.message, 'error');
-  } finally {
-    btn.textContent = 'START PLAYING →'; btn.disabled = false;
+    // Show persistent error — toast disappears too fast for users to read
+    const msg = e.message || 'Connection failed. Please try again.';
+    if (errEl) { errEl.textContent = '⚠️ ' + msg; errEl.style.display = 'block'; }
+    else toast(msg, 'error');
+    btn.textContent = 'RETRY →'; btn.disabled = false;
+    return;
   }
+  btn.textContent = 'START PLAYING →'; btn.disabled = false;
 }
 
 async function submitRegister() {
@@ -1106,11 +1163,34 @@ async function submitRegister() {
   }
 }
 
-function onLoggedIn() {
+async function onLoggedIn() {
   renderHeader();
   renderNav();
   document.getElementById('header').style.display = 'flex';
   document.getElementById('footer').style.display = 'flex';
+
+  // Check if user is already in an active/waiting game and resume it
+  try {
+    const games = await api('GET', '/api/games');
+    const myUsername = S.user?.username;
+    const myActive = myUsername && games.find(g =>
+      ['waiting','countdown','active'].includes(g.status) &&
+      (g.players || []).some(p => p.username === myUsername)
+    );
+    if (myActive) {
+      // Fetch full game to get card data, then resume
+      const full = await api('GET', '/api/games/' + myActive.id);
+      if (full.my_player) {
+        S.currentGameId = full.id;
+        S.myCard   = full.my_player.card        || null;
+        S.myMarked = full.my_player.marked_cells || [[2,2]];
+        showScreen('screen-game');
+        startGameScreen();
+        return;
+      }
+    }
+  } catch (_) {}
+
   showScreen('screen-lobby');
   startLobbyPolling();
 }
@@ -1130,7 +1210,7 @@ function renderHeader() {
 function renderNav() {
   const u = S.user;
   const items = [
-    { icon:'🎮', label:'Play',        screen:'screen-lobby' },
+    { icon:'🎮', label:'Play',        screen:'screen-lobby', fn:'goToLobby' },
     { icon:'🏆', label:'Leaderboard', screen:'screen-leaderboard', fn:'loadLeaderboard' },
     { icon:'📜', label:'History',     screen:'screen-history', fn:'loadHistory' },
   ];
@@ -1156,6 +1236,14 @@ function navTo(screen, fn) {
   closeNav();
   if (fn && typeof window[fn] === 'function') window[fn]();
   showScreen(screen);
+}
+function goToLobby() {
+  // Stop any in-progress game polling before going to lobby
+  clearInterval(S.gamePolling);
+  S.gamePolling = null;
+  S.currentGameId = null;
+  refreshLobby();
+  startLobbyPolling();
 }
 function openNav()  { document.getElementById('nav-drawer').classList.add('open'); document.getElementById('nav-overlay').classList.add('open'); }
 function closeNav() { document.getElementById('nav-drawer').classList.remove('open'); document.getElementById('nav-overlay').classList.remove('open'); }
@@ -1353,9 +1441,14 @@ async function pollGame() {
   try {
     const gm = await api('GET', '/api/games/' + S.currentGameId);
 
-    // Update player from server (marked cells stay client-side in S.myMarked)
+    // Sync player state from server
     if (gm.my_player) {
-      // Sync server-side marked with local (union)
+      // Re-hydrate card if lost (page refresh, WebApp re-open mid-game)
+      if (!S.myCard && gm.my_player.card) {
+        S.myCard = gm.my_player.card;
+        renderGameCard();
+      }
+      // Sync marked cells (union of server + local)
       const serverMarked = gm.my_player.marked_cells || [];
       serverMarked.forEach(([r,c]) => {
         if (!S.myMarked.some(([mr,mc])=>mr===r&&mc===c)) S.myMarked.push([r,c]);
@@ -1553,12 +1646,18 @@ function showResult(won, balance, winnerName) {
 }
 
 function confirmLeave() {
-  if (confirm('Leave this game? You may forfeit your bet.')) {
-    clearInterval(S.gamePolling);
-    S.currentGameId = null;
-    showScreen('screen-lobby');
-    startLobbyPolling();
-  }
+  document.getElementById('leave-modal').style.display = 'flex';
+}
+function doLeave(confirmed) {
+  document.getElementById('leave-modal').style.display = 'none';
+  if (!confirmed) return;
+  clearInterval(S.gamePolling);
+  S.gamePolling   = null;
+  S.currentGameId = null;
+  S.myCard        = null;
+  S.myMarked      = [[2,2]];
+  showScreen('screen-lobby');
+  startLobbyPolling();
 }
 
 /* ══════════════════════════════════════════════════════════
@@ -1714,7 +1813,7 @@ function toast(msg, type = 'info') {
   el.textContent = msg;
   el.className = `show toast-${type}`;
   clearTimeout(_toastTimeout);
-  _toastTimeout = setTimeout(() => { el.className = ''; }, 3200);
+  _toastTimeout = setTimeout(() => { el.className = ''; }, type === 'error' ? 5500 : 3200);
 }
 
 function spawnConfetti() {
