@@ -1644,15 +1644,15 @@ def start_bot_thread():
     t.start()
     logger.info('[Bot] Daemon thread launched.')
 
-# ── Start the bot when this module is imported by Gunicorn ───────────────────
-start_bot_thread()
+# ── Runs on import by Gunicorn AND by direct `python app.py` ─────────────────
+init_db()       # create tables if not exist
+GameEngine()    # start number-calling background thread
+start_bot_thread()  # start telegram bot daemon thread
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  ENTRY POINT  (python app.py — local dev only)
 # ══════════════════════════════════════════════════════════════════════════════
 if __name__ == '__main__':
-    init_db()
-    GameEngine()
     port = int(os.environ.get('PORT', 5000))
     print(f'[Benz Bingo] http://0.0.0.0:{port}  DB={DB_TYPE}')
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
