@@ -75,13 +75,14 @@ BOT_TOKEN        = os.environ.get('TELEGRAM_BOT_TOKEN', os.environ.get('BOT_TOKE
 ADMIN_TG_IDS_STR = os.environ.get('ADMIN_TG_IDS', '')
 ADMIN_TG_IDS     = set(ADMIN_TG_IDS_STR.split(',')) if ADMIN_TG_IDS_STR else set()
 ADMIN_TG_IDS_INT = {int(x) for x in ADMIN_TG_IDS if x.strip().isdigit()}
-WELCOME_BONUS    = int(os.environ.get('WELCOME_BONUS', 100))
-INTERNAL_SECRET  = os.environ.get('INTERNAL_SECRET', 'changeme-please')
-HOUSE_CUT        = 0.10
-COUNTDOWN_SECS   = 120
-CALL_INTERVAL    = 5
-BET_AMOUNTS      = [10, 50, 100, 200]
-REFERRAL_BONUS   = 50
+WELCOME_BONUS       = int(os.environ.get('WELCOME_BONUS', 10))
+INTERNAL_SECRET     = os.environ.get('INTERNAL_SECRET', 'changeme-please')
+HOUSE_CUT           = 0.10
+COUNTDOWN_SECS      = 30
+CALL_INTERVAL       = 2
+BET_AMOUNTS         = [10, 20, 50, 100]
+REFERRAL_BONUS      = 5          # ETB per batch
+REFERRALS_PER_BONUS = 10         # new users per batch
 MIN_DEPOSIT      = 10
 MAX_DEPOSIT      = 5_000
 MIN_WITHDRAW     = 100
@@ -296,16 +297,18 @@ def init_db():
     if DB_TYPE == 'postgres':
         ddl = """
             CREATE TABLE IF NOT EXISTS users (
-                id           SERIAL PRIMARY KEY,
-                tg_id        TEXT    UNIQUE NOT NULL,
-                username     TEXT    UNIQUE NOT NULL,
-                balance      INTEGER NOT NULL DEFAULT 100,
-                wins         INTEGER NOT NULL DEFAULT 0,
-                games_played INTEGER NOT NULL DEFAULT 0,
-                total_won    INTEGER NOT NULL DEFAULT 0,
-                total_bet    INTEGER NOT NULL DEFAULT 0,
-                is_admin     INTEGER NOT NULL DEFAULT 0,
-                created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                id              SERIAL PRIMARY KEY,
+                tg_id           TEXT    UNIQUE NOT NULL,
+                username        TEXT    UNIQUE NOT NULL,
+                balance         INTEGER NOT NULL DEFAULT 10,
+                wins            INTEGER NOT NULL DEFAULT 0,
+                games_played    INTEGER NOT NULL DEFAULT 0,
+                total_won       INTEGER NOT NULL DEFAULT 0,
+                total_bet       INTEGER NOT NULL DEFAULT 0,
+                is_admin        INTEGER NOT NULL DEFAULT 0,
+                referral_count  INTEGER NOT NULL DEFAULT 0,
+                referred_by     INTEGER,
+                created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
             CREATE TABLE IF NOT EXISTS bingo_games (
                 id                   TEXT    PRIMARY KEY,
@@ -325,8 +328,12 @@ def init_db():
                 user_id       INTEGER NOT NULL REFERENCES users(id),
                 picked_number INTEGER,
                 card          TEXT,
+                card2         TEXT,
                 marked_cells  TEXT    NOT NULL DEFAULT '[[2,2]]',
+                marked2       TEXT    NOT NULL DEFAULT '[[2,2]]',
+                bet_paid      INTEGER NOT NULL DEFAULT 1,
                 has_bingo     INTEGER NOT NULL DEFAULT 0,
+                kicked        INTEGER NOT NULL DEFAULT 0,
                 joined_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 UNIQUE(game_id, user_id)
             );
@@ -350,6 +357,24 @@ def init_db():
             cur.execute(ddl)
             conn.commit()
             print('[DB] PostgreSQL schema ready.')
+            # Migrate existing DBs — add columns if missing
+            migrations = [
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_count INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by INTEGER",
+                "ALTER TABLE bingo_players ADD COLUMN IF NOT EXISTS card2 TEXT",
+                "ALTER TABLE bingo_players ADD COLUMN IF NOT EXISTS marked2 TEXT NOT NULL DEFAULT '[[2,2]]'",
+                "ALTER TABLE bingo_players ADD COLUMN IF NOT EXISTS bet_paid INTEGER NOT NULL DEFAULT 1",
+                "ALTER TABLE bingo_players ADD COLUMN IF NOT EXISTS kicked INTEGER NOT NULL DEFAULT 0",
+            ]
+            conn2 = _get_conn()
+            try:
+                cur2 = conn2.cursor()
+                for m in migrations:
+                    try: cur2.execute(m)
+                    except Exception: pass
+                conn2.commit()
+            finally:
+                _release_conn(conn2)
         finally:
             _release_conn(conn)
     else:
@@ -358,16 +383,18 @@ def init_db():
             conn.execute('PRAGMA journal_mode=WAL')
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS users (
-                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                    tg_id        TEXT    UNIQUE NOT NULL,
-                    username     TEXT    UNIQUE NOT NULL,
-                    balance      INTEGER DEFAULT 100,
-                    wins         INTEGER DEFAULT 0,
-                    games_played INTEGER DEFAULT 0,
-                    total_won    INTEGER DEFAULT 0,
-                    total_bet    INTEGER DEFAULT 0,
-                    is_admin     INTEGER DEFAULT 0,
-                    created_at   TEXT    DEFAULT (datetime('now'))
+                    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tg_id          TEXT    UNIQUE NOT NULL,
+                    username       TEXT    UNIQUE NOT NULL,
+                    balance        INTEGER DEFAULT 10,
+                    wins           INTEGER DEFAULT 0,
+                    games_played   INTEGER DEFAULT 0,
+                    total_won      INTEGER DEFAULT 0,
+                    total_bet      INTEGER DEFAULT 0,
+                    is_admin       INTEGER DEFAULT 0,
+                    referral_count INTEGER DEFAULT 0,
+                    referred_by    INTEGER,
+                    created_at     TEXT DEFAULT (datetime('now'))
                 );
                 CREATE TABLE IF NOT EXISTS bingo_games (
                     id                   TEXT PRIMARY KEY,
@@ -388,8 +415,12 @@ def init_db():
                     user_id       INTEGER NOT NULL,
                     picked_number INTEGER,
                     card          TEXT,
+                    card2         TEXT,
                     marked_cells  TEXT    DEFAULT '[[2,2]]',
+                    marked2       TEXT    DEFAULT '[[2,2]]',
+                    bet_paid      INTEGER DEFAULT 1,
                     has_bingo     INTEGER DEFAULT 0,
+                    kicked        INTEGER DEFAULT 0,
                     joined_at     TEXT    DEFAULT (datetime('now')),
                     UNIQUE(game_id, user_id),
                     FOREIGN KEY (game_id) REFERENCES bingo_games(id),
@@ -475,8 +506,9 @@ def require_admin():
 #  BINGO LOGIC
 # ══════════════════════════════════════════════════════════════════════════════
 def generate_bingo_card(seed: int) -> list:
+    """Standard BINGO card: B=1-15, I=16-30, N=31-45, G=46-60, O=61-75. 5 per col, FREE centre."""
     rng    = random.Random(seed ^ int(time.time() * 10) % 0xFFFF)
-    ranges = [(1,20),(21,40),(41,60),(61,80),(81,100)]
+    ranges = [(1,15),(16,30),(31,45),(46,60),(61,75)]
     cols   = []
     for lo, hi in ranges:
         pool = list(range(lo, hi + 1))
@@ -486,8 +518,29 @@ def generate_bingo_card(seed: int) -> list:
     card[2][2] = 'FREE'
     return card
 
-def check_bingo(card: list, marked: list) -> bool:
-    s = {(r, c) for r, c in marked}
+BINGO_COLS = {0:'B',1:'I',2:'N',3:'G',4:'O'}
+COL_RANGES = {0:(1,15),1:(16,30),2:(31,45),3:(46,60),4:(61,75)}
+
+def check_bingo(card: list, marked: list, called: list) -> bool:
+    """
+    True only if the marked cells form a line AND every non-FREE marked cell
+    has its number in the correct BINGO column AND that number was called.
+    Rules: B=col0 (1-15), I=col1 (16-30), N=col2 (31-45), G=col3 (46-60), O=col4 (61-75)
+    """
+    called_set = set(called)
+    s = set()
+    for r, c in marked:
+        val = card[r][c]
+        if val == 'FREE':
+            s.add((r, c))
+            continue
+        lo, hi = COL_RANGES[c]
+        if val not in called_set:
+            return False          # number not yet called
+        if not (lo <= val <= hi):
+            return False          # wrong column
+        s.add((r, c))
+    # Check lines
     for r in range(5):
         if all((r, c) in s for c in range(5)): return True
     for c in range(5):
@@ -536,7 +589,7 @@ class GameEngine:
                     )
                     print(f'[Engine] {gid}: COUNTDOWN ({pcount} players)')
 
-                # countdown
+                # countdown — resets if players drop below 2
                 elif status == 'countdown':
                     if pcount < 2:
                         db.run(
@@ -544,7 +597,15 @@ class GameEngine:
                             (gid,)
                         )
                     elif g['countdown_started_at'] and (now - g['countdown_started_at']) >= COUNTDOWN_SECS:
-                        pool = list(range(1, 101))
+                        # Build pool 1-75 as "LETTER-NUMBER" strings
+                        pool = []
+                        for num in range(1, 76):
+                            if   num <= 15: col = 'B'
+                            elif num <= 30: col = 'I'
+                            elif num <= 45: col = 'N'
+                            elif num <= 60: col = 'G'
+                            else:           col = 'O'
+                            pool.append(f'{col}-{num}')
                         random.shuffle(pool)
                         db.run(
                             "UPDATE bingo_games SET status='active', started_at=?, number_pool=? WHERE id=?",
@@ -552,14 +613,14 @@ class GameEngine:
                         )
                         print(f'[Engine] {gid}: ACTIVE')
 
-                # active — call next number(s)
+                # active — call next number every CALL_INTERVAL seconds
                 elif status == 'active':
                     called = json.loads(g['called_numbers'] or '[]')
                     pool   = json.loads(g['number_pool']   or '[]')
                     if not pool:
-                        # Exhausted — refund all
+                        # Exhausted — refund all active (non-kicked) players
                         players = db.query(
-                            'SELECT * FROM bingo_players WHERE game_id=?', (gid,)
+                            'SELECT * FROM bingo_players WHERE game_id=? AND kicked=0', (gid,)
                         )
                         for p in players:
                             db.run(
@@ -578,7 +639,7 @@ class GameEngine:
                     while len(called) < expected and pool:
                         nxt = pool.pop(0)
                         called.append(nxt)
-                        print(f'[Engine] {gid}: called {nxt} ({len(called)}/100)')
+                        print(f'[Engine] {gid}: called {nxt} ({len(called)}/75)')
 
                     db.run(
                         'UPDATE bingo_games SET called_numbers=?, number_pool=? WHERE id=?',
@@ -613,9 +674,10 @@ def auth():
 
 @app.route('/api/register', methods=['POST'])
 def register():
-    body     = request.json or {}
-    tg_id    = str(body.get('tg_id', '')).strip()
-    username = body.get('username', '').strip()
+    body        = request.json or {}
+    tg_id       = str(body.get('tg_id', '')).strip()
+    username    = body.get('username', '').strip()
+    referred_by = body.get('referred_by')   # tg_id of referrer
     if not tg_id or not username:
         return jsonify({'error': 'tg_id and username are required'}), 400
     if len(username) < 2 or len(username) > 20:
@@ -625,11 +687,26 @@ def register():
     if query_db('SELECT id FROM users WHERE tg_id=?', (tg_id,), one=True):
         return jsonify({'error': 'Telegram account already registered'}), 409
     is_admin = 1 if tg_id in ADMIN_TG_IDS else 0
+    ref_user = None
+    if referred_by:
+        ref_user = query_db('SELECT * FROM users WHERE tg_id=?', (str(referred_by),), one=True)
+    ref_id = ref_user['id'] if ref_user else None
     execute_db(
-        'INSERT INTO users (tg_id, username, balance, is_admin) VALUES (?,?,?,?)',
-        (tg_id, username, WELCOME_BONUS, is_admin)
+        'INSERT INTO users (tg_id, username, balance, is_admin, referred_by) VALUES (?,?,?,?,?)',
+        (tg_id, username, WELCOME_BONUS, is_admin, ref_id)
     )
     user = query_db('SELECT * FROM users WHERE tg_id=?', (tg_id,), one=True)
+    # Credit referrer: +5 ETB per 10 successful referrals
+    if ref_user:
+        execute_db(
+            'UPDATE users SET referral_count=referral_count+1 WHERE id=?', (ref_user['id'],)
+        )
+        updated_ref = query_db('SELECT referral_count FROM users WHERE id=?', (ref_user['id'],), one=True)
+        rc = updated_ref['referral_count']
+        if rc % REFERRALS_PER_BONUS == 0:
+            execute_db(
+                'UPDATE users SET balance=balance+? WHERE id=?', (REFERRAL_BONUS, ref_user['id'])
+            )
     return jsonify({'status': 'registered', 'user': user}), 201
 
 @app.route('/api/user', methods=['GET'])
@@ -638,6 +715,24 @@ def get_user():
     if err: return err
     fresh = query_db('SELECT * FROM users WHERE id=?', (user['id'],), one=True)
     return jsonify(fresh)
+
+@app.route('/api/referral-stats', methods=['GET'])
+def referral_stats():
+    user, _, err = require_auth()
+    if err: return err
+    fresh = query_db('SELECT referral_count FROM users WHERE id=?', (user['id'],), one=True)
+    rc    = fresh['referral_count'] if fresh else 0
+    friends = query_db(
+        'SELECT username, created_at FROM users WHERE referred_by=? ORDER BY created_at DESC',
+        (user['id'],)
+    )
+    return jsonify({
+        'referral_count': rc,
+        'next_bonus_at':  ((rc // REFERRALS_PER_BONUS) + 1) * REFERRALS_PER_BONUS,
+        'friends':        friends,
+        'bonus_amount':   REFERRAL_BONUS,
+        'per_bonus':      REFERRALS_PER_BONUS,
+    })
 
 @app.route('/api/games', methods=['GET'])
 def list_games():
@@ -712,9 +807,13 @@ def get_game(gid):
     )
     if prow:
         gm['my_player'] = {
-            'card':         json.loads(prow['card'] or '[]'),
+            'card':         json.loads(prow['card']  or '[]'),
+            'card2':        json.loads(prow['card2'] or 'null') if prow.get('card2') else None,
             'marked_cells': json.loads(prow['marked_cells'] or '[[2,2]]'),
+            'marked2':      json.loads(prow.get('marked2') or '[[2,2]]'),
             'has_bingo':    prow['has_bingo'],
+            'kicked':       prow.get('kicked', 0),
+            'bet_paid':     prow.get('bet_paid', 1),
         }
     return jsonify(gm)
 
@@ -722,21 +821,25 @@ def get_game(gid):
 def join_game(gid):
     user, _, err = require_auth()
     if err: return err
-    body   = request.json or {}
-    picked = body.get('picked_number')
+    body       = request.json or {}
+    picked     = body.get('picked_number')
+    dual_card  = bool(body.get('dual_card'))   # True = pay double, get 2 cards
     gm = query_db('SELECT * FROM bingo_games WHERE id=?', (gid,), one=True)
     if not gm:
         return jsonify({'error': 'Game not found'}), 404
     if gm['status'] not in ('waiting', 'countdown'):
         return jsonify({'error': 'Game already started or finished'}), 400
     existing = query_db(
-        'SELECT id FROM bingo_players WHERE game_id=? AND user_id=?', (gid, user['id']), one=True
+        'SELECT * FROM bingo_players WHERE game_id=? AND user_id=?', (gid, user['id']), one=True
     )
     if existing:
-        prow = query_db(
-            'SELECT * FROM bingo_players WHERE game_id=? AND user_id=?', (gid, user['id']), one=True
-        )
-        return jsonify({'status': 'already_joined', 'card': json.loads(prow['card'])}), 200
+        return jsonify({
+            'status':      'already_joined',
+            'card':        json.loads(existing['card'] or '[]'),
+            'card2':       json.loads(existing['card2'] or 'null') if existing.get('card2') else None,
+            'marked_cells':json.loads(existing['marked_cells'] or '[[2,2]]'),
+            'marked2':     json.loads(existing.get('marked2') or '[[2,2]]'),
+        }), 200
     if picked:
         taken = query_db(
             'SELECT id FROM bingo_players WHERE game_id=? AND picked_number=?', (gid, picked), one=True
@@ -744,26 +847,38 @@ def join_game(gid):
         if taken:
             return jsonify({'error': 'That number is already taken'}), 409
     fresh = query_db('SELECT * FROM users WHERE id=?', (user['id'],), one=True)
-    if fresh['balance'] < gm['bet_amount']:
+    cost = gm['bet_amount'] * (2 if dual_card else 1)
+    if fresh['balance'] < cost:
         return jsonify({'error': 'Insufficient balance'}), 400
-    card = generate_bingo_card(picked or random.randint(1, 100))
+    card  = generate_bingo_card(picked or random.randint(1, 100))
+    card2 = generate_bingo_card(random.randint(1000, 9999)) if dual_card else None
     with _db_lock:
         execute_db(
             'UPDATE users SET balance=balance-?, total_bet=total_bet+? WHERE id=?',
-            (gm['bet_amount'], gm['bet_amount'], user['id'])
+            (cost, cost, user['id'])
         )
         execute_db(
-            'INSERT INTO bingo_players (game_id, user_id, picked_number, card) VALUES (?,?,?,?)',
-            (gid, user['id'], picked, json.dumps(card))
+            'INSERT INTO bingo_players (game_id, user_id, picked_number, card, card2, bet_paid) VALUES (?,?,?,?,?,?)',
+            (gid, user['id'], picked, json.dumps(card),
+             json.dumps(card2) if card2 else None, 2 if dual_card else 1)
         )
-    return jsonify({'status': 'joined', 'card': card, 'marked_cells': [[2, 2]]})
+    return jsonify({
+        'status':       'joined',
+        'card':         card,
+        'card2':        card2,
+        'marked_cells': [[2, 2]],
+        'marked2':      [[2, 2]],
+    })
 
 @app.route('/api/games/<gid>/mark', methods=['POST'])
 def mark_cell(gid):
+    """Toggle a cell on card1 or card2. No restriction on which cells can be marked — 
+    bingo validation happens at claim time."""
     user, _, err = require_auth()
     if err: return err
-    body = request.json or {}
-    r, c = body.get('row'), body.get('col')
+    body    = request.json or {}
+    r, c    = body.get('row'), body.get('col')
+    card_id = body.get('card_id', 1)   # 1 = primary card, 2 = second card
     if r is None or c is None:
         return jsonify({'error': 'row and col required'}), 400
     gm = query_db('SELECT * FROM bingo_games WHERE id=?', (gid,), one=True)
@@ -774,25 +889,32 @@ def mark_cell(gid):
     )
     if not prow:
         return jsonify({'error': 'You are not in this game'}), 403
-    card   = json.loads(prow['card'])
-    called = json.loads(gm['called_numbers'] or '[]')
-    val    = card[r][c]
-    if val != 'FREE' and val not in called:
-        return jsonify({'error': f'Number {val} has not been called yet'}), 400
-    marked = json.loads(prow['marked_cells'])
-    if [r, c] not in marked:
-        marked.append([r, c])
-        with _db_lock:
-            execute_db(
-                'UPDATE bingo_players SET marked_cells=? WHERE id=?',
-                (json.dumps(marked), prow['id'])
-            )
-    return jsonify({'marked_cells': marked})
+    if card_id == 2 and not prow.get('card2'):
+        return jsonify({'error': 'No second card'}), 400
+    col_key  = 'marked2' if card_id == 2 else 'marked_cells'
+    marked   = json.loads(prow.get(col_key) or '[[2,2]]')
+    cell     = [r, c]
+    if cell in marked:
+        marked.remove(cell)    # toggle off
+    else:
+        marked.append(cell)    # toggle on
+    with _db_lock:
+        execute_db(
+            f'UPDATE bingo_players SET {col_key}=? WHERE id=?',
+            (json.dumps(marked), prow['id'])
+        )
+    return jsonify({'marked_cells': marked, 'card_id': card_id})
 
 @app.route('/api/games/<gid>/claim', methods=['POST'])
 def claim_bingo(gid):
+    """
+    Validate BINGO. If the claim is wrong → kick player (no refund for their bet).
+    If correct → pay prize and finish game.
+    """
     user, _, err = require_auth()
     if err: return err
+    body    = request.json or {}
+    card_id = body.get('card_id', 1)   # which card the player is claiming on
     with _db_lock:
         gm = query_db('SELECT * FROM bingo_games WHERE id=?', (gid,), one=True)
         if not gm:
@@ -806,12 +928,37 @@ def claim_bingo(gid):
         )
         if not prow:
             return jsonify({'error': 'You are not in this game'}), 403
-        card   = json.loads(prow['card'])
-        marked = json.loads(prow['marked_cells'])
-        if not check_bingo(card, marked):
-            return jsonify({'error': 'No valid BINGO on your card!'}), 400
+        if prow.get('kicked'):
+            return jsonify({'error': 'You have been removed from this game'}), 403
+        called  = json.loads(gm['called_numbers'] or '[]')
+        # Parse called numbers — stored as "B-7" strings, extract integer part
+        called_ints = []
+        for c in called:
+            try: called_ints.append(int(c.split('-')[1]))
+            except Exception: pass
+        if card_id == 2 and prow.get('card2'):
+            card   = json.loads(prow['card2'])
+            marked = json.loads(prow.get('marked2') or '[[2,2]]')
+        else:
+            card   = json.loads(prow['card'])
+            marked = json.loads(prow['marked_cells'])
+        valid = check_bingo(card, marked, called_ints)
+        if not valid:
+            # False claim → kick and forfeit their bet (already deducted at join)
+            execute_db(
+                'UPDATE bingo_players SET kicked=1 WHERE id=?', (prow['id'],)
+            )
+            execute_db(
+                'UPDATE users SET games_played=games_played+1 WHERE id=?', (user['id'],)
+            )
+            execute_db(
+                'INSERT INTO game_history (user_id,game_id,bet_amount,prize_won,won) VALUES (?,?,?,0,0)',
+                (user['id'], gid, gm['bet_amount'])
+            )
+            return jsonify({'kicked': True, 'error': 'Wrong BINGO — you have been removed from the game!'}), 200
+        # Valid BINGO — count only non-kicked players for pot
         pcount = query_db(
-            'SELECT COUNT(*) AS c FROM bingo_players WHERE game_id=?', (gid,), one=True
+            'SELECT COUNT(*) AS c FROM bingo_players WHERE game_id=? AND kicked=0', (gid,), one=True
         )['c']
         pot   = pcount * gm['bet_amount']
         prize = int(pot * (1 - HOUSE_CUT))
@@ -826,7 +973,7 @@ def claim_bingo(gid):
              (user['id'], gid, gm['bet_amount'], prize)),
         ])
         losers = query_db(
-            'SELECT user_id FROM bingo_players WHERE game_id=? AND user_id!=?',
+            'SELECT user_id FROM bingo_players WHERE game_id=? AND user_id!=? AND kicked=0',
             (gid, user['id'])
         )
         for lo in losers:
@@ -933,6 +1080,56 @@ def toggle_admin(uid):
     return jsonify({'success': True})
 
 # ── Health check (for UptimeRobot / Render) ───────────────────────────────────
+@app.route('/api/deposit-request', methods=['POST'])
+def webapp_deposit_request():
+    user, tg_user, err = require_auth()
+    if err: return err
+    body  = request.json or {}
+    amt   = float(body.get('amount', 0))
+    ref   = str(body.get('reference', '')).strip()
+    if amt < MIN_DEPOSIT:
+        return jsonify({'error': f'Min deposit {MIN_DEPOSIT} ETB'}), 400
+    if not ref:
+        return jsonify({'error': 'Reference required'}), 400
+    fresh = query_db('SELECT * FROM users WHERE id=?', (user['id'],), one=True)
+    admin_txt = (
+        f"📥 <b>Deposit Request (WebApp)</b>\n\n"
+        f"BB Username: <b>{fresh['username']}</b>\n"
+        f"TG ID: <code>{user['tg_id']}</code>\n"
+        f"Amount: <b>{amt:,.0f} ETB</b>\nReference: <code>{ref}</code>\n"
+        f"Time: {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC\n\n"
+        f"✅ Approve: <code>/admindeposit {user['tg_id']} {amt:.0f}</code>"
+    )
+    for aid in ADMIN_TG_IDS_INT:
+        _notify_queue.put({'tg_id': aid, 'event': 'custom', 'data': {'message': admin_txt}})
+    return jsonify({'status': 'submitted'})
+
+@app.route('/api/withdraw-request', methods=['POST'])
+def webapp_withdraw_request():
+    user, tg_user, err = require_auth()
+    if err: return err
+    body  = request.json or {}
+    amt   = float(body.get('amount', 0))
+    phone = str(body.get('phone', '')).strip()
+    if amt < MIN_WITHDRAW:
+        return jsonify({'error': f'Min withdrawal {MIN_WITHDRAW} ETB'}), 400
+    if not phone:
+        return jsonify({'error': 'Phone required'}), 400
+    fresh = query_db('SELECT * FROM users WHERE id=?', (user['id'],), one=True)
+    if fresh['balance'] < amt:
+        return jsonify({'error': 'Insufficient balance'}), 400
+    admin_txt = (
+        f"💸 <b>Withdrawal Request (WebApp)</b>\n\n"
+        f"BB Username: <b>{fresh['username']}</b>\n"
+        f"TG ID: <code>{user['tg_id']}</code>\n"
+        f"Amount: <b>{amt:,.0f} ETB</b>\nPhone: <code>{phone}</code>\n"
+        f"Time: {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC\n\n"
+        f"✅ Approve: <code>/adminwithdraw {user['tg_id']} {amt:.0f}</code>"
+    )
+    for aid in ADMIN_TG_IDS_INT:
+        _notify_queue.put({'tg_id': aid, 'event': 'custom', 'data': {'message': admin_txt}})
+    return jsonify({'status': 'submitted'})
+
 @app.route('/health')
 def health():
     return jsonify({'status': 'ok', 'db': DB_TYPE})
@@ -1017,6 +1214,7 @@ def kb_main() -> ReplyKeyboardMarkup:
             [KeyboardButton(text='🎮 Play Bingo')],
             [KeyboardButton(text='💰 Deposit'),  KeyboardButton(text='💳 Withdraw')],
             [KeyboardButton(text='📊 My Stats'), KeyboardButton(text='🏆 Leaderboard')],
+            [KeyboardButton(text='📨 Invite Friends'), KeyboardButton(text='🆘 Support')],
         ],
         resize_keyboard=True,
         input_field_placeholder='Choose an option…',
@@ -1039,8 +1237,8 @@ def kb_phone() -> ReplyKeyboardMarkup:
 
 def kb_webapp(label: str = '🎱 Open Benz Bingo', bet: int | None = None) -> InlineKeyboardMarkup:
     port = int(os.environ.get('PORT', 5000))
-    base = os.environ.get('WEBAPP_URL', f'http://localhost:{port}')
-    url  = f'{base}?bet={bet}' if bet else base
+    base = os.environ.get('WEBAPP_URL', f'http://localhost:{port}').rstrip('/')
+    url  = f'{base}/?bet={bet}' if bet else f'{base}/'
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text=label, web_app=WebAppInfo(url=url))
     ]])
@@ -1120,30 +1318,20 @@ async def reg_username(message: Message, state: FSMContext, session: aiohttp.Cli
     data = await state.get_data()
     try:
         res  = await bot_api('POST', '/api/register', tg_id=int(data['tg_id']),
-                             body={'tg_id': data['tg_id'], 'username': u}, session=session)
+                             body={'tg_id': data['tg_id'], 'username': u,
+                                   'referred_by': data.get('referrer_id')}, session=session)
     except ValueError as exc:
         await message.answer(f'⚠️ {exc}\nTry a different username:'); return
     user = res['user']
 
-    # Referral bonus
-    ref = data.get('referrer_id')
-    if ref:
-        try:
-            ref_users = await bot_api('GET', '/api/admin/users', tg_id=int(data['tg_id']),
-                                     session=session)
-            ref_user  = next((x for x in ref_users if x['tg_id'] == str(ref)), None)
-            if ref_user:
-                await bot_api('POST', '/api/admin/funds', tg_id=ref,
-                              body={'username': ref_user['username'], 'amount': REFERRAL_BONUS},
-                              session=session)
-        except Exception:
-            pass
+    # Referral — pass referrer tg_id to /api/register (backend handles bonus logic)
+    # (Already handled server-side via referred_by field in register endpoint)
 
     await state.set_state(Registration.waiting_for_phone)
     await message.answer(
         f"✅ <b>Account created!</b>\n\n"
         f"Username: <b>{user['username']}</b>\n"
-        f"Welcome bonus: <b>100 ETB</b> 🎁\n\n"
+        f"Welcome bonus: <b>10 ETB</b> 🎁\n\n"
         "📱 Share your phone to enable deposits/withdrawals.\n"
         "(Tap <b>⏭ Skip</b> to do this later.)",
         reply_markup=kb_phone(),
@@ -1182,15 +1370,17 @@ async def cmd_help(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(
         '🎱 <b>Benz Bingo — How to Play</b>\n\n'
-        '1. Tap 🎮 Play Bingo → choose bet (10/50/100/200 ETB)\n'
-        '2. Pick a lucky number 1–100\n'
-        '3. Get your unique 5×5 BINGO card\n'
-        '4. 2+ players join → 2-min countdown → GO!\n'
-        '5. Numbers called every 5 seconds\n'
-        '6. Tap called numbers to mark them\n'
-        '7. Complete row / column / diagonal → 🎉 BINGO!\n'
-        '8. Winner takes <b>90% of the pot</b>\n\n'
-        '<b>Commands:</b> /start /balance /stats /history /referral /cancel /help',
+        '1. Tap 🎮 Play Bingo → choose bet (10/20/50/100 ETB)\n'
+        '2. Open the game and pick your lucky number\n'
+        '3. Optionally choose a 2nd card (double bet, double chance!)\n'
+        '4. 2+ players join → 30-second countdown → GO!\n'
+        '5. Numbers called every 2 seconds (e.g. B-7, O-65)\n'
+        '6. Mark numbers on your card in the correct column (B I N G O)\n'
+        '7. Complete row / column / diagonal → tap 🎉 BINGO!\n'
+        '8. Wrong BINGO claim = removed from game!\n'
+        '9. Winner takes <b>90% of the pot</b>\n\n'
+        '<b>Commands:</b> /start /balance /stats /history /referral /cancel /help\n'
+        '<b>Support:</b> @BenzBingo_Support',
     )
 
 # /balance ────────────────────────────────────────────────────────────────────
@@ -1256,7 +1446,7 @@ async def cmd_referral(message: Message):
     link = f'https://t.me/{_bot_username}?start={message.from_user.id}'
     await message.answer(
         f'🔗 <b>Your Referral Link</b>\n\n<code>{link}</code>\n\n'
-        f'Earn <b>{REFERRAL_BONUS} ETB</b> for every friend who joins and plays! 🎁',
+        f'Earn <b>{REFERRAL_BONUS} ETB</b> every {REFERRALS_PER_BONUS} friends! 🎁',
     )
 
 # 🏆 Leaderboard ──────────────────────────────────────────────────────────────
@@ -1331,6 +1521,7 @@ async def cmd_deposit(message: Message, state: FSMContext, session: aiohttp.Clie
         u = await bot_api('GET', '/api/user', tg_id=message.from_user.id, session=session)
     except Exception as exc:
         await message.answer(f'⚠️ {exc}'); return
+    await state.update_data(bb_username=u.get('username', '—'))
     await state.set_state(Deposit.waiting_for_amount)
     await message.answer(
         f"💰 <b>Deposit Funds</b>\n\n"
@@ -1371,9 +1562,12 @@ async def deposit_ref(message: Message, state: FSMContext):
     amt  = data['deposit_amount']
     ref  = message.text.strip()
     await state.clear()
+    data2 = await state.get_data()
+    bb_username = data2.get('bb_username', '—')
     admin_txt = (
-        f"📥 <b>Deposit Request</b>\n\nUser: <code>{message.from_user.id}</code>"
-        f" (@{message.from_user.username or '—'})\n"
+        f"📥 <b>Deposit Request</b>\n\n"
+        f"BB Username: <b>{bb_username}</b>\n"
+        f"TG: <code>{message.from_user.id}</code> (@{message.from_user.username or '—'})\n"
         f"Amount: <b>{amt:,.0f} ETB</b>\nReference: <code>{ref}</code>\n"
         f"Time: {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC\n\n"
         f"✅ Approve: <code>/admindeposit {message.from_user.id} {amt:.0f}</code>"
@@ -1398,6 +1592,7 @@ async def cmd_withdraw(message: Message, state: FSMContext, session: aiohttp.Cli
                              f"Your balance: <b>{u['balance']:,} ETB</b>"); return
     if u['games_played'] < 1:
         await message.answer('⚠️ Play at least one game before withdrawing.'); return
+    await state.update_data(bb_username=u.get('username', '—'))
     await state.set_state(Withdrawal.waiting_for_amount)
     await message.answer(
         f"💳 <b>Withdraw Funds</b>\n\nAvailable: <b>{u['balance']:,} ETB</b>\n"
@@ -1439,9 +1634,11 @@ async def withdraw_phone(message: Message, state: FSMContext):
     amt   = data['withdraw_amount']
     phone = message.text.strip()
     await state.clear()
+    bb_username = data.get('bb_username', '—')
     admin_txt = (
-        f"💸 <b>Withdrawal Request</b>\n\nUser: <code>{message.from_user.id}</code>"
-        f" (@{message.from_user.username or '—'})\n"
+        f"💸 <b>Withdrawal Request</b>\n\n"
+        f"BB Username: <b>{bb_username}</b>\n"
+        f"TG: <code>{message.from_user.id}</code> (@{message.from_user.username or '—'})\n"
         f"Amount: <b>{amt:,.0f} ETB</b>\nPhone: <code>{phone}</code>\n"
         f"Time: {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC\n\n"
         f"✅ Approve: <code>/adminwithdraw {message.from_user.id} {amt:.0f}</code>"
@@ -1451,6 +1648,39 @@ async def withdraw_phone(message: Message, state: FSMContext):
     await message.answer(
         f"✅ <b>Withdrawal request received!</b>\n\nAmount: <b>{amt:,.0f} ETB</b>\n"
         "Processed within <b>24 hours</b>. 🔔",
+        reply_markup=kb_main(),
+    )
+
+# 🆘 Support ──────────────────────────────────────────────────────────────────
+@bot_router.message(F.text == '🆘 Support')
+async def cmd_support(message: Message):
+    await message.answer(
+        '🆘 <b>Contact Support</b>\n\n'
+        'For help with deposits, withdrawals, or any issue:\n\n'
+        '👉 @BenzBingo_Support\n\n'
+        'We typically respond within 1–2 hours.',
+        reply_markup=kb_main(),
+    )
+
+# 📨 Invite Friends ────────────────────────────────────────────────────────────
+@bot_router.message(F.text == '📨 Invite Friends')
+async def cmd_invite(message: Message, session: aiohttp.ClientSession):
+    link = f'https://t.me/{_bot_username}?start={message.from_user.id}'
+    try:
+        stats = await bot_api('GET', '/api/referral-stats', tg_id=message.from_user.id, session=session)
+    except Exception:
+        stats = {'referral_count': 0, 'next_bonus_at': REFERRALS_PER_BONUS, 'friends': []}
+    rc      = stats.get('referral_count', 0)
+    nxt     = stats.get('next_bonus_at', REFERRALS_PER_BONUS)
+    friends = stats.get('friends', [])
+    recent  = '\n'.join(f"  👤 {f['username']}" for f in friends[:5]) or '  <i>None yet</i>'
+    await message.answer(
+        f'📨 <b>Invite Friends & Earn!</b>\n\n'
+        f'🔗 Your referral link:\n<code>{link}</code>\n\n'
+        f'👥 Friends joined: <b>{rc}</b>\n'
+        f'🎁 Next bonus at: <b>{nxt} referrals</b> (+{REFERRAL_BONUS} ETB)\n\n'
+        f'<b>Recent friends:</b>\n{recent}\n\n'
+        f'Share your link → friends register → you earn <b>{REFERRAL_BONUS} ETB</b> every {REFERRALS_PER_BONUS} signups!',
         reply_markup=kb_main(),
     )
 
