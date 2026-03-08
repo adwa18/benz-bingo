@@ -807,6 +807,11 @@ body::before {
             <div class="bet-etb">ETB</div>
             <div class="bet-players"><span class="dot" style="color:var(--green)"></span><span id="bp-10">0</span> waiting</div>
           </div>
+          <div class="bet-card" data-amount="20" onclick="selectBet(20,this)">
+            <div class="bet-amount">20</div>
+            <div class="bet-etb">ETB</div>
+            <div class="bet-players"><span class="dot" style="color:var(--green)"></span><span id="bp-20">0</span> waiting</div>
+          </div>
           <div class="bet-card" data-amount="50" onclick="selectBet(50,this)">
             <div class="bet-amount">50</div>
             <div class="bet-etb">ETB</div>
@@ -816,11 +821,6 @@ body::before {
             <div class="bet-amount">100</div>
             <div class="bet-etb">ETB</div>
             <div class="bet-players"><span class="dot" style="color:var(--green)"></span><span id="bp-100">0</span> waiting</div>
-          </div>
-          <div class="bet-card" data-amount="200" onclick="selectBet(200,this)">
-            <div class="bet-amount">200</div>
-            <div class="bet-etb">ETB</div>
-            <div class="bet-players"><span class="dot" style="color:var(--green)"></span><span id="bp-200">0</span> waiting</div>
           </div>
         </div>
       </div>
@@ -847,6 +847,19 @@ body::before {
             <div style="font-size:12px;color:var(--text2)">Lucky Number Selected!</div>
             <div style="font-size:11px;color:var(--text3);margin-top:2px">Tap to generate your BINGO card</div>
           </div>
+        </div>
+        <!-- Dual card toggle -->
+        <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:12px">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+            <div>
+              <div style="font-size:13px;font-weight:700;color:var(--text)">🃏 Add 2nd Card</div>
+              <div style="font-size:11px;color:var(--text2);margin-top:2px">Double bet · Double chance to win!</div>
+            </div>
+            <div id="dual-toggle" onclick="toggleDual()" style="width:44px;height:24px;border-radius:12px;background:var(--surface3);border:2px solid var(--border);cursor:pointer;transition:all .25s;position:relative;flex-shrink:0">
+              <div id="dual-knob" style="width:18px;height:18px;border-radius:50%;background:#888;position:absolute;top:1px;left:1px;transition:all .25s"></div>
+            </div>
+          </div>
+          <div id="dual-cost-label" style="display:none;font-size:11px;color:var(--gold);margin-top:8px;text-align:center">Cost: <span id="dual-cost-num">—</span> ETB (×2)</div>
         </div>
         <button class="btn btn-gold" onclick="generateAndPreview()">GENERATE MY CARD →</button>
       </div>
@@ -911,10 +924,20 @@ body::before {
       <!-- BOTTOM HALF -->
       <div class="game-bottom">
         <div class="game-card-header">
-          <div class="game-card-title">MY BINGO CARD</div>
-          <button class="btn btn-green btn-sm" id="bingo-claim-btn" onclick="doClaim()">🎉 BINGO!</button>
+          <div class="game-card-title" id="game-card-title-label">MY BINGO CARD</div>
+          <button class="btn btn-green btn-sm" id="bingo-claim-btn" onclick="doClaim(1)">🎉 BINGO!</button>
         </div>
-        <div class="bingo-card-grid" id="game-card-grid" style="max-width:100%"></div>
+        <!-- Single or dual card area -->
+        <div id="cards-area" style="display:flex;gap:6px;overflow-x:auto;min-height:0;flex:1">
+          <div style="flex:1;min-width:0">
+            <div class="bingo-card-grid" id="game-card-grid" style="width:100%"></div>
+          </div>
+          <div id="card2-area" style="flex:1;min-width:0;display:none">
+            <div style="font-size:9px;font-weight:700;color:var(--gold);text-align:center;margin-bottom:2px;letter-spacing:1px">CARD 2</div>
+            <div class="bingo-card-grid" id="game-card2-grid" style="width:100%"></div>
+            <button class="btn btn-green btn-sm" style="margin-top:4px;width:100%;font-size:10px" onclick="doClaim(2)">🎉 BINGO! (Card 2)</button>
+          </div>
+        </div>
         <button class="btn btn-ghost btn-sm" style="margin-top:4px;font-size:11px" onclick="confirmLeave()">Leave Game</button>
       </div>
     </div>
@@ -941,6 +964,66 @@ body::before {
       <div class="card card-gold fade-in">
         <div class="card-title">📜 Game History</div>
         <div id="history-list"></div>
+      </div>
+    </div>
+
+    <!-- ── DEPOSIT ── -->
+    <div class="screen" id="screen-deposit">
+      <div class="card card-gold fade-in">
+        <div class="card-title">💰 Deposit Funds</div>
+        <div id="deposit-payment-info" style="background:var(--surface2);border-radius:10px;padding:12px;margin-bottom:14px;font-size:12px;color:var(--text2);line-height:1.7"></div>
+        <label class="label">Amount (ETB)</label>
+        <input class="input" id="dep-amount" type="number" min="10" max="5000" placeholder="Enter amount (min 10 ETB)">
+        <label class="label" style="margin-top:10px">Transaction Reference / SMS Code</label>
+        <input class="input" id="dep-ref" type="text" placeholder="e.g. TXN123456">
+        <button class="btn btn-gold" style="margin-top:14px" onclick="submitDeposit()">SUBMIT DEPOSIT REQUEST</button>
+        <button class="btn btn-ghost" style="margin-top:8px" onclick="showScreen('screen-lobby')">← Back</button>
+      </div>
+    </div>
+
+    <!-- ── WITHDRAW ── -->
+    <div class="screen" id="screen-withdraw">
+      <div class="card card-gold fade-in">
+        <div class="card-title">💳 Withdraw Funds</div>
+        <div style="background:var(--surface2);border-radius:10px;padding:12px;margin-bottom:14px;font-size:12px;color:var(--text2);line-height:1.7">
+          Minimum withdrawal: <b>100 ETB</b><br>Processing time: up to <b>24 hours</b>
+        </div>
+        <label class="label">Amount (ETB)</label>
+        <input class="input" id="wd-amount" type="number" min="100" placeholder="Enter amount (min 100 ETB)">
+        <label class="label" style="margin-top:10px">Phone Number</label>
+        <input class="input" id="wd-phone" type="tel" placeholder="e.g. 0913252238">
+        <button class="btn btn-gold" style="margin-top:14px" onclick="submitWithdraw()">SUBMIT WITHDRAWAL</button>
+        <button class="btn btn-ghost" style="margin-top:8px" onclick="showScreen('screen-lobby')">← Back</button>
+      </div>
+    </div>
+
+    <!-- ── FRIENDS ── -->
+    <div class="screen" id="screen-friends">
+      <div class="card card-gold fade-in">
+        <div class="card-title">📨 Invite Friends</div>
+        <div style="background:var(--surface2);border-radius:10px;padding:14px;margin-bottom:14px;text-align:center">
+          <div style="font-size:28px">🎁</div>
+          <div style="font-size:13px;font-weight:700;color:var(--text);margin:6px 0">Earn 5 ETB every 10 friends!</div>
+          <div style="font-size:11px;color:var(--text2)">Share your link → they register → you earn</div>
+        </div>
+        <div style="margin-bottom:14px">
+          <div style="font-size:11px;color:var(--text3);margin-bottom:4px">YOUR REFERRAL LINK</div>
+          <div id="friends-link" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px;font-size:11px;word-break:break-all;color:var(--gold);cursor:pointer" onclick="copyReferralLink()"></div>
+          <button class="btn btn-ghost btn-sm" style="margin-top:6px;width:100%" onclick="copyReferralLink()">📋 Copy Link</button>
+        </div>
+        <div style="display:flex;gap:12px;margin-bottom:14px">
+          <div style="flex:1;background:var(--surface2);border-radius:10px;padding:12px;text-align:center">
+            <div style="font-size:24px;font-weight:900;font-family:'Orbitron',monospace;color:var(--gold)" id="friends-count">0</div>
+            <div style="font-size:11px;color:var(--text2)">Friends Joined</div>
+          </div>
+          <div style="flex:1;background:var(--surface2);border-radius:10px;padding:12px;text-align:center">
+            <div style="font-size:24px;font-weight:900;font-family:'Orbitron',monospace;color:var(--green)" id="friends-next">10</div>
+            <div style="font-size:11px;color:var(--text2)">For Next Bonus</div>
+          </div>
+        </div>
+        <div class="card-title" style="font-size:12px;margin-bottom:8px">Recent Friends</div>
+        <div id="friends-list" style="font-size:12px;color:var(--text2)"><div class="empty">Loading…</div></div>
+        <button class="btn btn-ghost" style="margin-top:12px" onclick="shareReferralTelegram()">📤 Share via Telegram</button>
       </div>
     </div>
 
@@ -986,7 +1069,8 @@ body::before {
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:24px;max-width:280px;width:100%;text-align:center">
     <div style="font-size:28px;margin-bottom:10px">⚠️</div>
     <div style="font-weight:700;font-size:16px;color:var(--text);margin-bottom:8px">Leave Game?</div>
-    <div style="font-size:13px;color:var(--text2);margin-bottom:20px;line-height:1.5">You may forfeit your bet. Your spot will be lost.</div>
+    <div style="font-size:13px;color:var(--text2);margin-bottom:8px;line-height:1.5">Your spot will be lost.</div>
+    <div id="leave-forfeit-warn" style="display:none;font-size:12px;color:var(--red);margin-bottom:12px;font-weight:700">⚠️ Game started — leaving forfeits your bet!</div>
     <div style="display:flex;gap:10px">
       <button class="btn btn-ghost" style="flex:1;padding:10px" onclick="doLeave(false)">Cancel</button>
       <button class="btn" style="flex:1;padding:10px;background:var(--red);color:#fff;border-color:var(--red)" onclick="doLeave(true)">Leave</button>
@@ -1011,7 +1095,7 @@ body::before {
 ══════════════════════════════════════════════════════════ */
 // Change this to your deployed backend URL
 const API_BASE = window.location.origin; // same origin if flask serves index.html
-const BET_AMOUNTS = [10, 50, 100, 200];
+const BET_AMOUNTS = [10, 20, 50, 100];
 
 /* ══════════════════════════════════════════════════════════
    STATE
@@ -1021,11 +1105,14 @@ const S = {
   user:         null,    // DB user
   selectedBet:  null,
   currentGameId:null,
-  myCard:       null,    // 5×5
-  myMarked:     [[2,2]], // [[r,c],...]
+  myCard:       null,    // 5×5 card 1
+  myCard2:      null,    // 5×5 card 2 (dual mode)
+  myMarked:     [[2,2]], // [[r,c],...] card 1
+  myMarked2:    [[2,2]], // card 2 marks
+  dualCard:     false,   // player chose dual card option
   pickedNumber: null,
   isLightMode:  false,
-  gamePolling:  null,    // setInterval handle
+  gamePolling:  null,
   lobbyPolling: null,
   prevCalledLen:0,
 };
@@ -1087,7 +1174,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       onLoggedIn();
       // Handle ?bet=N deep link
       const urlBet = parseInt(new URLSearchParams(location.search).get('bet'));
-      if (urlBet && [10,50,100,200].includes(urlBet)) {
+      if (urlBet && [10,20,50,100].includes(urlBet)) {
         setTimeout(() => {
           const card = document.querySelector(`.bet-card[data-amount="${urlBet}"]`);
           if (card) selectBet(urlBet, card);
@@ -1122,7 +1209,7 @@ async function handleWelcomeClick() {
       onLoggedIn();
       // If opened from bot with ?bet=N, pre-select that bet
       const urlBet = parseInt(new URLSearchParams(location.search).get('bet'));
-      if (urlBet && [10,50,100,200].includes(urlBet)) {
+      if (urlBet && [10,20,50,100].includes(urlBet)) {
         setTimeout(() => {
           const card = document.querySelector(`.bet-card[data-amount="${urlBet}"]`);
           if (card) selectBet(urlBet, card);
@@ -1210,9 +1297,12 @@ function renderHeader() {
 function renderNav() {
   const u = S.user;
   const items = [
-    { icon:'🎮', label:'Play',        screen:'screen-lobby', fn:'goToLobby' },
-    { icon:'🏆', label:'Leaderboard', screen:'screen-leaderboard', fn:'loadLeaderboard' },
-    { icon:'📜', label:'History',     screen:'screen-history', fn:'loadHistory' },
+    { icon:'🎮', label:'Play',           screen:'screen-lobby',       fn:'goToLobby' },
+    { icon:'💰', label:'Deposit',        screen:'screen-deposit',     fn:'loadDeposit' },
+    { icon:'💳', label:'Withdraw',       screen:'screen-withdraw',    fn:'' },
+    { icon:'📨', label:'Invite Friends', screen:'screen-friends',     fn:'loadFriends' },
+    { icon:'🏆', label:'Leaderboard',    screen:'screen-leaderboard', fn:'loadLeaderboard' },
+    { icon:'📜', label:'History',        screen:'screen-history',     fn:'loadHistory' },
   ];
   if (u?.is_admin) items.push({ icon:'⚙️', label:'Admin Panel', screen:'screen-admin', fn:'loadAdmin' });
 
@@ -1237,6 +1327,63 @@ function navTo(screen, fn) {
   if (fn && typeof window[fn] === 'function') window[fn]();
   showScreen(screen);
 }
+/* ══ DEPOSIT / WITHDRAW / FRIENDS ══════════════════════════════════════ */
+function loadDeposit() {
+  const uid = window.Telegram?.WebApp?.initDataUnsafe?.user?.id || 'YOUR_TG_ID';
+  const el  = document.getElementById('deposit-payment-info');
+  if (el) el.innerHTML = `📱 <b>Send payment to:</b><br>CBE: <code>1000123456789</code><br>Telebirr: <code>0913252238</code><br><br>Reference: <code>BB-${uid}</code>`;
+}
+async function submitDeposit() {
+  const amt=(document.getElementById('dep-amount')?.value||'').trim();
+  const ref=(document.getElementById('dep-ref')?.value||'').trim();
+  if (!amt||parseFloat(amt)<10) { toast('Min deposit is 10 ETB','error'); return; }
+  if (!ref) { toast('Enter transaction reference','error'); return; }
+  try {
+    await api('POST','/api/deposit-request',{amount:parseFloat(amt),reference:ref});
+    toast('✅ Deposit request sent! Credited within 30 min.','success');
+    document.getElementById('dep-amount').value=''; document.getElementById('dep-ref').value='';
+    setTimeout(()=>showScreen('screen-lobby'),2500);
+  } catch(e) { toast(e.message||'Error','error'); }
+}
+async function submitWithdraw() {
+  const amt=(document.getElementById('wd-amount')?.value||'').trim();
+  const phone=(document.getElementById('wd-phone')?.value||'').trim();
+  if (!amt||parseFloat(amt)<100) { toast('Min withdrawal is 100 ETB','error'); return; }
+  if (!phone) { toast('Enter phone number','error'); return; }
+  try {
+    await api('POST','/api/withdraw-request',{amount:parseFloat(amt),phone});
+    toast('✅ Withdrawal request sent! Processed within 24h.','success');
+    document.getElementById('wd-amount').value=''; document.getElementById('wd-phone').value='';
+    setTimeout(()=>showScreen('screen-lobby'),2500);
+  } catch(e) { toast(e.message||'Error','error'); }
+}
+async function loadFriends() {
+  try {
+    const stats=await api('GET','/api/referral-stats');
+    document.getElementById('friends-count').textContent=stats.referral_count||0;
+    document.getElementById('friends-next').textContent=stats.next_bonus_at||10;
+    const botName='BenzBingoGameBot';
+    const link=`https://t.me/${botName}?start=${S.tgUser?.id||''}`;
+    const le=document.getElementById('friends-link'); if(le)le.textContent=link;
+    const listEl=document.getElementById('friends-list');
+    const fr=stats.friends||[];
+    listEl.innerHTML=fr.length
+      ?fr.map(f=>`<div style="padding:8px 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between"><span>👤 ${f.username}</span><span style="color:var(--text3);font-size:11px">${String(f.created_at||'').slice(0,10)}</span></div>`).join('')
+      :'<div class="empty" style="padding:20px 0">No friends yet — share your link!</div>';
+  } catch(e){ toast('Could not load friends','error'); }
+}
+function copyReferralLink() {
+  const t=document.getElementById('friends-link')?.textContent||'';
+  if(navigator.clipboard)navigator.clipboard.writeText(t).then(()=>toast('Copied!','success'));
+  else toast(t,'info');
+}
+function shareReferralTelegram() {
+  const t=document.getElementById('friends-link')?.textContent||'';
+  const url=`https://t.me/share/url?url=${encodeURIComponent(t)}&text=${encodeURIComponent('Join Benz Bingo 🎱 and win ETB!')}`;
+  if(window.Telegram?.WebApp?.openTelegramLink)window.Telegram.WebApp.openTelegramLink(url);
+  else window.open(url,'_blank');
+}
+
 function goToLobby() {
   // Stop any in-progress game polling before going to lobby
   clearInterval(S.gamePolling);
@@ -1271,7 +1418,7 @@ async function refreshLobby() {
   // Update player counts per bet
   try {
     const games = await api('GET', '/api/games');
-    [10,50,100,200].forEach(b => {
+    [10,20,50,100].forEach(b => {
       const count = games.filter(g=>g.bet_amount===b).reduce((s,g)=>s+g.player_count,0);
       const el = document.getElementById('bp-'+b);
       if (el) el.textContent = count;
@@ -1430,10 +1577,13 @@ async function proceedToGame() {
    GAME SCREEN
 ══════════════════════════════════════════════════════════ */
 function startGameScreen() {
-  S.prevCalledLen = 0;
-  renderGameCard();
-  pollGame();
-  S.gamePolling = setInterval(pollGame, 2000);
+  S.prevCalledLen=0;
+  const c2=document.getElementById('card2-area'), tl=document.getElementById('game-card-title-label');
+  if (S.myCard2) { if(c2)c2.style.display='block'; if(tl)tl.textContent='CARD 1'; }
+  else           { if(c2)c2.style.display='none';  if(tl)tl.textContent='MY BINGO CARD'; }
+  const cb=document.getElementById('bingo-claim-btn'); if(cb)cb.style.display='inline-block';
+  renderGameCard(); if(S.myCard2) renderGameCard2();
+  pollGame(); S.gamePolling=setInterval(pollGame,2000);
 }
 
 async function pollGame() {
@@ -1443,37 +1593,34 @@ async function pollGame() {
 
     // Sync player state from server
     if (gm.my_player) {
-      // Re-hydrate card if lost (page refresh, WebApp re-open mid-game)
-      if (!S.myCard && gm.my_player.card) {
-        S.myCard = gm.my_player.card;
-        renderGameCard();
+      if (!S.myCard && gm.my_player.card) { S.myCard=gm.my_player.card; renderGameCard(); }
+      if (!S.myCard2 && gm.my_player.card2) {
+        S.myCard2=gm.my_player.card2; S.dualCard=true;
+        const a=document.getElementById('card2-area'); if(a) a.style.display='block';
+        renderGameCard2();
       }
-      // Sync marked cells (union of server + local)
-      const serverMarked = gm.my_player.marked_cells || [];
-      serverMarked.forEach(([r,c]) => {
-        if (!S.myMarked.some(([mr,mc])=>mr===r&&mc===c)) S.myMarked.push([r,c]);
-      });
+      // Server is source of truth for marks
+      S.myMarked  = gm.my_player.marked_cells || [[2,2]];
+      S.myMarked2 = gm.my_player.marked2      || [[2,2]];
+      if (gm.my_player.kicked) { clearInterval(S.gamePolling); showResult(false,0,null,true); return; }
     }
 
-    if (gm.status === 'finished') {
-      clearInterval(S.gamePolling);
-      handleGameFinished(gm);
-      return;
-    }
+    if (gm.status === 'finished') { clearInterval(S.gamePolling); handleGameFinished(gm); return; }
 
     if (gm.status === 'waiting' || gm.status === 'countdown') {
       showPhase('phase-waiting');
-      const remaining = gm.countdown_remaining ?? 120;
+      const remaining = gm.countdown_remaining ?? 30;
       document.getElementById('countdown-display').textContent = formatTime(remaining);
       document.getElementById('game-player-count').textContent = gm.player_count + ' player' + (gm.player_count!==1?'s':'');
       document.getElementById('game-room-label').textContent = gm.id;
-
       if (gm.status === 'waiting') {
+        _countdownStarted = false;
         document.getElementById('waiting-status-msg').textContent = '⏳ Waiting for another player to join…';
-        document.getElementById('game-status-chip').innerHTML = `<div class="chip chip-gold">WAITING</div>`;
+        document.getElementById('game-status-chip').innerHTML = '<div class="chip chip-gold">WAITING</div>';
       } else {
+        _countdownStarted = true;
         document.getElementById('waiting-status-msg').textContent = '✅ Countdown started! Get ready…';
-        document.getElementById('game-status-chip').innerHTML = `<div class="chip chip-green"><span class="dot"></span>COUNTDOWN</div>`;
+        document.getElementById('game-status-chip').innerHTML = '<div class="chip chip-green"><span class="dot"></span>COUNTDOWN</div>';
       }
     }
 
@@ -1482,20 +1629,13 @@ async function pollGame() {
       const called = gm.called_numbers || [];
       document.getElementById('called-count').textContent = called.length;
       document.getElementById('active-player-count').textContent = gm.player_count + ' players';
-
       if (called.length > 0) {
-        document.getElementById('current-call-num').textContent = called[called.length - 1];
+        // called numbers are "B-7" format — display as-is
+        document.getElementById('current-call-num').textContent = called[called.length-1];
       }
-
-      // New numbers called since last poll
-      if (called.length > S.prevCalledLen) {
-        const newNums = called.slice(S.prevCalledLen);
-        newNums.forEach(n => highlightCalledOnCard(n));
-        S.prevCalledLen = called.length;
-      }
-
+      S.prevCalledLen = called.length;
       renderCalledBubbles(called);
-      updateBingoButton();
+      // No card highlight — player marks manually
     }
   } catch (e) {
     console.warn('poll error', e.message);
@@ -1522,46 +1662,29 @@ function highlightCalledOnCard(num) {
   });
 }
 
-function renderGameCard() {
-  const el = document.getElementById('game-card-grid');
-  el.innerHTML = '';
-  if (!S.myCard) return;
-
-  ['B','I','N','G','O'].forEach(l => {
-    const h = document.createElement('div');
-    h.className = 'bc-header'; h.textContent = l; el.appendChild(h);
-  });
-
-  for (let r = 0; r < 5; r++) {
-    for (let c = 0; c < 5; c++) {
-      const val = S.myCard[r][c];
-      const div = document.createElement('div');
-      const isMarked = S.myMarked.some(([mr,mc])=>mr===r&&mc===c);
-      let cls = 'bc-cell';
-      if (val === 'FREE') cls += ' free marked';
-      else if (isMarked) cls += ' marked';
-      div.className = cls;
-      div.textContent = val;
-      div.dataset.row   = r;
-      div.dataset.col   = c;
-      div.dataset.value = (val === 'FREE') ? 'FREE' : val;
-      if (val !== 'FREE') div.onclick = () => markCell(div, r, c, val);
-      el.appendChild(div);
-    }
+function renderGameCard()  { buildCard('game-card-grid',  S.myCard,  S.myMarked,  1); }
+function renderGameCard2() { buildCard('game-card2-grid', S.myCard2, S.myMarked2, 2); }
+function buildCard(elId, card, marked, cardId) {
+  const el = document.getElementById(elId);
+  if (!el || !card) return; el.innerHTML='';
+  ['B','I','N','G','O'].forEach(l=>{const h=document.createElement('div');h.className='bc-header';h.textContent=l;el.appendChild(h);});
+  for (let r=0;r<5;r++) for (let c=0;c<5;c++) {
+    const val=card[r][c]; const div=document.createElement('div');
+    const isMarked=marked.some(([mr,mc])=>mr===r&&mc===c);
+    let cls='bc-cell';
+    if (val==='FREE') cls+=' free marked'; else if (isMarked) cls+=' marked';
+    div.className=cls; div.textContent=val;
+    if (val!=='FREE') div.onclick=()=>markCell(div,r,c,val,cardId);
+    el.appendChild(div);
   }
 }
 
-async function markCell(el, r, c, val) {
-  if (el.classList.contains('marked')) return;
+async function markCell(el, r, c, val, cardId=1) {
   try {
-    const res = await api('POST', `/api/games/${S.currentGameId}/mark`, { row:r, col:c });
-    S.myMarked = res.marked_cells;
-    el.classList.remove('called-hl');
-    el.classList.add('marked');
-    updateBingoButton();
-  } catch (e) {
-    toast(e.message, 'error');
-  }
+    const res = await api('POST', `/api/games/${S.currentGameId}/mark`, {row:r,col:c,card_id:cardId});
+    if (cardId===2) { S.myMarked2=res.marked_cells; buildCard('game-card2-grid',S.myCard2,S.myMarked2,2); }
+    else            { S.myMarked =res.marked_cells; buildCard('game-card-grid', S.myCard, S.myMarked, 1); }
+  } catch(e) { toast(e.message,'error'); }
 }
 
 function checkLocalBingo() {
@@ -1577,18 +1700,20 @@ function checkLocalBingo() {
   return false;
 }
 
-function updateBingoButton() {
-  const btn = document.getElementById('bingo-claim-btn');
-  if (checkLocalBingo()) btn.style.display = 'inline-block';
-}
+function updateBingoButton() { /* BINGO button always visible — server validates at claim */ }
 
-async function doClaim() {
+async function doClaim(cardId=1) {
   try {
-    const res = await api('POST', `/api/games/${S.currentGameId}/claim`);
-    clearInterval(S.gamePolling);
+    const res = await api('POST', `/api/games/${S.currentGameId}/claim`, { card_id: cardId });
+    if (res.kicked) {
+      clearInterval(S.gamePolling);
+      toast('❌ Wrong BINGO! Removed from game.', 'error');
+      setTimeout(() => showResult(false, 0, null, true), 1800);
+      return;
+    }
     if (res.winner) {
-      S.user = res.user;
-      renderHeader(); renderNav();
+      clearInterval(S.gamePolling);
+      S.user = res.user; renderHeader(); renderNav();
       showBingoOverlay(res.prize);
     }
   } catch (e) { toast(e.message, 'error'); }
@@ -1619,45 +1744,41 @@ function handleGameFinished(gm) {
   }
 }
 
-function showResult(won, balance, winnerName) {
+function showResult(won, balance, winnerName, kicked=false) {
   const el = document.getElementById('result-inner');
   if (won) {
-    el.innerHTML = `
-      <div class="card card-gold win-bg fade-in" style="text-align:center;margin-bottom:12px">
-        <div class="result-icon">🏆</div>
-        <div class="result-title" style="color:var(--gold)">YOU WIN!</div>
-        <div class="result-prize">+${(balance||0).toLocaleString()} ETB Balance</div>
-        <div class="result-sub">Winnings have been added to your wallet.</div>
-      </div>`;
+    el.innerHTML = `<div class="card card-gold win-bg fade-in" style="text-align:center;margin-bottom:12px">
+      <div class="result-icon">🏆</div><div class="result-title" style="color:var(--gold)">YOU WIN!</div>
+      <div class="result-prize">+${(balance||0).toLocaleString()} ETB Balance</div>
+      <div class="result-sub">Winnings added to your wallet.</div></div>`;
   } else {
-    el.innerHTML = `
-      <div class="card lose-bg fade-in" style="text-align:center;margin-bottom:12px">
-        <div class="result-icon">😔</div>
-        <div class="result-title" style="color:var(--red)">GAME OVER</div>
-        <div style="font-size:15px;font-weight:700;color:var(--text2);margin-bottom:6px">
-          ${winnerName ? winnerName+' got BINGO!' : 'No winner this round.'}
-        </div>
-        <div class="result-sub">Better luck next time! Keep playing.</div>
-      </div>`;
+    const icon = kicked ? '🚫' : '😔';
+    const title= kicked ? 'KICKED!' : 'GAME OVER';
+    const msg  = kicked ? 'False BINGO claim — bet forfeited.' : (winnerName ? winnerName+' got BINGO!' : 'No winner this round.');
+    el.innerHTML = `<div class="card lose-bg fade-in" style="text-align:center;margin-bottom:12px">
+      <div class="result-icon">${icon}</div><div class="result-title" style="color:var(--red)">${title}</div>
+      <div style="font-size:15px;font-weight:700;color:var(--text2);margin-bottom:6px">${msg}</div>
+      <div class="result-sub">Better luck next time!</div></div>`;
   }
   showScreen('screen-result');
-  S.currentGameId = null;
+  S.currentGameId=null; S.myCard=null; S.myCard2=null; S.dualCard=false; _countdownStarted=false;
   startLobbyPolling();
 }
 
+let _countdownStarted = false;
 function confirmLeave() {
+  const warn = document.getElementById('leave-forfeit-warn');
+  if (warn) warn.style.display = _countdownStarted ? 'block' : 'none';
   document.getElementById('leave-modal').style.display = 'flex';
 }
 function doLeave(confirmed) {
   document.getElementById('leave-modal').style.display = 'none';
   if (!confirmed) return;
   clearInterval(S.gamePolling);
-  S.gamePolling   = null;
-  S.currentGameId = null;
-  S.myCard        = null;
-  S.myMarked      = [[2,2]];
-  showScreen('screen-lobby');
-  startLobbyPolling();
+  S.gamePolling=null; S.currentGameId=null;
+  S.myCard=null; S.myCard2=null; S.myMarked=[[2,2]]; S.myMarked2=[[2,2]];
+  S.dualCard=false; _countdownStarted=false;
+  showScreen('screen-lobby'); startLobbyPolling();
 }
 
 /* ══════════════════════════════════════════════════════════
