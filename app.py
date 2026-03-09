@@ -1003,6 +1003,15 @@ def leaderboard():
     )
     return jsonify(rows)
 
+# ── Admin: user lookup by tg_id (for bot autocomplete) ───────────────────────
+@app.route('/api/admin/user-by-tgid/<tgid>', methods=['GET'])
+def admin_user_by_tgid(tgid):
+    user, err = require_admin()
+    if err: return err
+    row = query_db('SELECT username,tg_id,balance FROM users WHERE tg_id=?', (str(tgid),), one=True)
+    if not row: return jsonify({'error': 'Not found'}), 404
+    return jsonify(row)
+
 # ── Admin routes ──────────────────────────────────────────────────────────────
 @app.route('/api/admin/stats', methods=['GET'])
 def admin_stats():
@@ -1084,23 +1093,30 @@ def toggle_admin(uid):
 def webapp_deposit_request():
     user, tg_user, err = require_auth()
     if err: return err
-    body  = request.json or {}
-    amt   = float(body.get('amount', 0))
-    ref   = str(body.get('reference', '')).strip()
+    body          = request.json or {}
+    amt           = float(body.get('amount', 0))
+    ref           = str(body.get('reference', '')).strip()
+    sender_name   = str(body.get('sender_name', '')).strip()  # name as on payment
     if amt < MIN_DEPOSIT:
         return jsonify({'error': f'Min deposit {MIN_DEPOSIT} ETB'}), 400
     if not ref:
         return jsonify({'error': 'Reference required'}), 400
+    if not sender_name:
+        return jsonify({'error': 'Sender name required'}), 400
     fresh = query_db('SELECT * FROM users WHERE id=?', (user['id'],), one=True)
     admin_txt = (
         f"📥 <b>Deposit Request (WebApp)</b>\n\n"
         f"BB Username: <b>{fresh['username']}</b>\n"
         f"TG ID: <code>{user['tg_id']}</code>\n"
+        f"Sender Name: {sender_name}\n"
         f"Amount: <b>{amt:,.0f} ETB</b>\nReference: <code>{ref}</code>\n"
         f"Time: {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC\n\n"
         f"✅ Approve: <code>/admindeposit {user['tg_id']} {amt:.0f}</code>"
     )
+    if not ADMIN_TG_IDS_INT:
+        logger.warning('[deposit-request] ADMIN_TG_IDS_INT is empty — set ADMIN_TG_IDS env var')
     for aid in ADMIN_TG_IDS_INT:
+        logger.info(f'[deposit-request] notifying admin {aid}')
         _notify_queue.put({'tg_id': aid, 'event': 'custom', 'data': {'message': admin_txt}})
     return jsonify({'status': 'submitted'})
 
@@ -1108,13 +1124,19 @@ def webapp_deposit_request():
 def webapp_withdraw_request():
     user, tg_user, err = require_auth()
     if err: return err
-    body  = request.json or {}
-    amt   = float(body.get('amount', 0))
-    phone = str(body.get('phone', '')).strip()
+    body         = request.json or {}
+    amt          = float(body.get('amount', 0))
+    phone        = str(body.get('phone', '')).strip()
+    bank         = str(body.get('bank', '')).strip()         # 'CBE' or 'Telebirr'
+    account_name = str(body.get('account_name', '')).strip()
     if amt < MIN_WITHDRAW:
         return jsonify({'error': f'Min withdrawal {MIN_WITHDRAW} ETB'}), 400
     if not phone:
-        return jsonify({'error': 'Phone required'}), 400
+        return jsonify({'error': 'Phone/account number required'}), 400
+    if not bank:
+        return jsonify({'error': 'Select payment method'}), 400
+    if not account_name:
+        return jsonify({'error': 'Account name required'}), 400
     fresh = query_db('SELECT * FROM users WHERE id=?', (user['id'],), one=True)
     if fresh['balance'] < amt:
         return jsonify({'error': 'Insufficient balance'}), 400
@@ -1122,11 +1144,16 @@ def webapp_withdraw_request():
         f"💸 <b>Withdrawal Request (WebApp)</b>\n\n"
         f"BB Username: <b>{fresh['username']}</b>\n"
         f"TG ID: <code>{user['tg_id']}</code>\n"
-        f"Amount: <b>{amt:,.0f} ETB</b>\nPhone: <code>{phone}</code>\n"
+        f"Amount: <b>{amt:,.0f} ETB</b>\n"
+        f"Method: <b>{bank}</b>\n"
+        f"Account: <code>{phone}</code> ({account_name})\n"
         f"Time: {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC\n\n"
         f"✅ Approve: <code>/adminwithdraw {user['tg_id']} {amt:.0f}</code>"
     )
+    if not ADMIN_TG_IDS_INT:
+        logger.warning('[withdraw-request] ADMIN_TG_IDS_INT is empty — set ADMIN_TG_IDS env var')
     for aid in ADMIN_TG_IDS_INT:
+        logger.info(f'[withdraw-request] notifying admin {aid}')
         _notify_queue.put({'tg_id': aid, 'event': 'custom', 'data': {'message': admin_txt}})
     return jsonify({'status': 'submitted'})
 
@@ -1285,26 +1312,41 @@ async def cmd_start(message: Message, state: FSMContext, session: aiohttp.Client
     except Exception as exc:
         await message.answer(f'⚠️ Server error: {exc}'); return
 
+    LOGO_URL = os.environ.get('LOGO_URL', '')
     if res.get('status') == 'existing':
         u = res['user']
-        await message.answer(
+        welcome_text = (
             f"👋 Welcome back, <b>{u['username']}</b>!\n\n"
             f"💰 Balance: <b>{u['balance']:,} ETB</b>\n"
-            f"🏆 Wins: {u['wins']}  ·  🎮 Games: {u['games_played']}",
-            reply_markup=kb_main(),
+            f"🏆 Wins: {u['wins']}  ·  🎮 Games: {u['games_played']}"
         )
+        if LOGO_URL:
+            try:
+                await message.answer_photo(photo=LOGO_URL, caption=welcome_text,
+                                           reply_markup=kb_main())
+            except Exception:
+                await message.answer(welcome_text, reply_markup=kb_main())
+        else:
+            await message.answer(welcome_text, reply_markup=kb_main())
     else:
         suggested = res.get('suggested_username') or tg.first_name or 'Player'
         await state.set_state(Registration.waiting_for_username)
         await state.update_data(tg_id=str(tg.id))
-        await message.answer(
+        new_text = (
             '🎱 <b>Welcome to Benz Bingo!</b>\n\n'
             'Pick numbers · Mark your card · Shout <b>BINGO!</b>\n'
             'Win up to <b>90% of the pot</b> every round 💰\n\n'
             f'Choose a username (2–20 chars, no spaces):\n'
-            f'<i>Suggestion:</i> <code>{suggested}</code>',
-            reply_markup=kb_cancel(),
+            f'<i>Suggestion:</i> <code>{suggested}</code>'
         )
+        if LOGO_URL:
+            try:
+                await message.answer_photo(photo=LOGO_URL, caption=new_text,
+                                           reply_markup=kb_cancel())
+            except Exception:
+                await message.answer(new_text, reply_markup=kb_cancel())
+        else:
+            await message.answer(new_text, reply_markup=kb_cancel())
 
 # Registration FSM ────────────────────────────────────────────────────────────
 @bot_router.message(Registration.waiting_for_username, F.text)
@@ -1559,11 +1601,10 @@ async def deposit_ref(message: Message, state: FSMContext):
         await state.clear()
         await message.answer('Deposit cancelled.', reply_markup=kb_main()); return
     data = await state.get_data()
-    amt  = data['deposit_amount']
+    amt         = data['deposit_amount']
+    bb_username = data.get('bb_username', '—')
     ref  = message.text.strip()
     await state.clear()
-    data2 = await state.get_data()
-    bb_username = data2.get('bb_username', '—')
     admin_txt = (
         f"📥 <b>Deposit Request</b>\n\n"
         f"BB Username: <b>{bb_username}</b>\n"
@@ -1709,8 +1750,22 @@ async def cmd_admin(message: Message, session: aiohttp.ClientSession):
 @admin_guard
 async def cmd_adep(message: Message, session: aiohttp.ClientSession):
     parts = message.text.split(maxsplit=2)
+    # Show usage hint with tg_id → username lookup
+    if len(parts) == 2 and parts[1].isdigit():
+        try:
+            row = await bot_api('GET', f'/api/admin/user-by-tgid/{parts[1]}',
+                                tg_id=message.from_user.id, session=session)
+            await message.answer(
+                f"👤 TG <code>{parts[1]}</code> = <b>{row['username']}</b> "
+                f"(balance: {row['balance']:,} ETB)\n\n"
+                f"Usage: <code>/admindeposit {parts[1]} &lt;amount&gt;</code>"
+            )
+        except Exception:
+            await message.answer('Usage: /admindeposit &lt;tg_id&gt; &lt;amount&gt;')
+        return
     if len(parts) < 3 or not parts[1].isdigit():
-        await message.answer('Usage: /admindeposit &lt;tg_id&gt; &lt;amount&gt;'); return
+        await message.answer('Usage: /admindeposit &lt;tg_id&gt; &lt;amount&gt;\n'
+                             'Tip: /admindeposit &lt;tg_id&gt; to look up username first'); return
     tid, amt = int(parts[1]), float(parts[2])
     try:
         users  = await bot_api('GET', '/api/admin/users', tg_id=message.from_user.id, session=session)
@@ -1727,8 +1782,21 @@ async def cmd_adep(message: Message, session: aiohttp.ClientSession):
 @admin_guard
 async def cmd_awdraw(message: Message, session: aiohttp.ClientSession):
     parts = message.text.split(maxsplit=2)
+    if len(parts) == 2 and parts[1].isdigit():
+        try:
+            row = await bot_api('GET', f'/api/admin/user-by-tgid/{parts[1]}',
+                                tg_id=message.from_user.id, session=session)
+            await message.answer(
+                f"👤 TG <code>{parts[1]}</code> = <b>{row['username']}</b> "
+                f"(balance: {row['balance']:,} ETB)\n\n"
+                f"Usage: <code>/adminwithdraw {parts[1]} &lt;amount&gt;</code>"
+            )
+        except Exception:
+            await message.answer('Usage: /adminwithdraw &lt;tg_id&gt; &lt;amount&gt;')
+        return
     if len(parts) < 3 or not parts[1].isdigit():
-        await message.answer('Usage: /adminwithdraw &lt;tg_id&gt; &lt;amount&gt;'); return
+        await message.answer('Usage: /adminwithdraw &lt;tg_id&gt; &lt;amount&gt;\n'
+                             'Tip: /adminwithdraw &lt;tg_id&gt; to look up username first'); return
     tid, amt = int(parts[1]), float(parts[2])
     try:
         users  = await bot_api('GET', '/api/admin/users', tg_id=message.from_user.id, session=session)
