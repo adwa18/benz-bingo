@@ -123,12 +123,22 @@ if DB_TYPE == 'postgres':
     import psycopg2.extras
     import psycopg2.pool
     import psycopg2.extensions
-    _pg_pool = psycopg2.pool.ThreadedConnectionPool(
-        minconn=1, maxconn=10, dsn=_DATABASE_URL
-    )
 else:
     import sqlite3 as _sqlite3
-    _pg_pool = None
+
+# Pool is created lazily on first DB call — keeps Gunicorn from blocking at import
+_pg_pool = None
+_pg_pool_lock = __import__('threading').Lock()
+
+def _ensure_pool():
+    global _pg_pool
+    if _pg_pool is not None:
+        return
+    with _pg_pool_lock:
+        if _pg_pool is None:
+            _pg_pool = psycopg2.pool.ThreadedConnectionPool(
+                minconn=1, maxconn=10, dsn=_DATABASE_URL
+            )
 
 # ── Connection helpers ────────────────────────────────────────────────────────
 def _new_pg_conn():
@@ -151,6 +161,7 @@ def _conn_is_alive(conn) -> bool:
 def _get_conn():
     """Get a connection from the pool; replace it silently if stale."""
     if DB_TYPE == 'postgres':
+        _ensure_pool()
         conn = _pg_pool.getconn()
         if not _conn_is_alive(conn):
             logger.warning('[DB] Stale connection — replacing.')
@@ -1999,7 +2010,9 @@ def start_bot_thread():
 # Solution: defer ALL startup into a background thread so Gunicorn binds
 # immediately, Render detects the port, and DB + bot start in the background.
 def _deferred_startup():
-    time.sleep(1)          # tiny yield so Gunicorn workers finish binding first
+    # Pool is now lazy — no need to sleep. Gunicorn binds immediately at import.
+    # Give it 2s anyway so the first HTTP request isn't racing with DB init.
+    time.sleep(2)
     init_db()              # create/migrate tables
     GameEngine()           # start number-calling background thread
     start_bot_thread()     # start telegram bot daemon thread
