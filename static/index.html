@@ -531,9 +531,9 @@ body::before {
 .game-bottom {
   flex:1 1 0; overflow-y:auto;
   background:var(--bg);
-  padding:8px;
+  padding:6px 8px;
   display:flex; flex-direction:column;
-  gap:6px;
+  gap:4px;
   min-height:0;
 }
 /* Game top: waiting phase */
@@ -609,15 +609,25 @@ body::before {
 /* Game card fills its container height */
 .bingo-card-grid.game-card {
   max-width: none; margin: 0;
-  flex: 1; min-height: 0;
+  flex: 0 0 auto;          /* don't stretch — use natural cell sizes */
   display: grid !important;
   grid-template-columns: repeat(5, 1fr);
-  grid-template-rows: auto repeat(5, 1fr);
 }
-.bingo-card-grid.game-card .bc-cell { aspect-ratio: unset; min-height: 0; }
-/* Dual mode — smaller text */
-#cards-area:not(.single) .bc-header { font-size: 13px; padding: 5px 2px; }
+.bingo-card-grid.game-card .bc-cell {
+  aspect-ratio: 1;
+  min-height: 0;
+  font-size: 12px;
+}
+/* Single card — comfortable size */
+#cards-area.single .bingo-card-grid.game-card .bc-cell { font-size: 13px; }
+/* Dual mode — smaller to fit side by side */
+#cards-area:not(.single) .bc-header { font-size: 11px; padding: 4px 2px; }
 #cards-area:not(.single) .bc-cell   { font-size: 9px; }
+/* Dual card border separation */
+#card2-area {
+  border-left: 2px solid var(--gold);
+  padding-left: 6px;
+}
 #bingo-claim-btn {
   display:none;
   animation: bingo-pulse .6s ease infinite alternate;
@@ -888,19 +898,14 @@ body::before {
         <button class="btn btn-gold" id="preview-btn" onclick="goToPreview()">PREVIEW CARD →</button>
       </div>
 
-      <!-- Card 2 picker (shown when dual is toggled on) -->
-      <div class="card slide-up" id="picker-card2-section" style="display:none">
-        <div class="card-title" style="font-size:13px;margin-bottom:10px">🃏 Pick Lucky Number for Card 2</div>
-        <div style="font-size:11px;color:var(--text2);margin-bottom:10px">Pick a different number — each generates a unique card.</div>
-        <div class="num-grid" id="num-grid-2"></div>
-        <div id="picker-chosen2-panel" style="display:none;margin-top:12px">
-          <div style="display:flex;align-items:center;gap:10px">
-            <div style="font-family:'Orbitron',monospace;font-size:28px;font-weight:900;color:var(--green)" id="chosen-num2-display">—</div>
-            <div style="font-size:12px;color:var(--text2)">Card 2 Lucky Number ✓</div>
-          </div>
-        </div>
-      </div>
 
+
+      <!-- Card 2 pick status (shown when dual enabled) -->
+      <div id="card2-pick-status" style="display:none;margin-top:-6px;margin-bottom:4px;padding:8px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;font-size:12px">
+        <span style="color:var(--text2)">🃏 Card 2 number: </span>
+        <span id="chosen-num2-display" style="font-family:'Orbitron',monospace;font-weight:900;color:var(--green)">—</span>
+        <span id="card2-pick-hint" style="color:var(--text3);margin-left:6px">← tap a number above</span>
+      </div>
       <button class="btn btn-ghost" style="margin-top:4px" onclick="showScreen('screen-lobby')">← Back to Lobby</button>
     </div>
 
@@ -1542,24 +1547,25 @@ function toggleDual() {
   const tog    = document.getElementById('dual-toggle');
   const label  = document.getElementById('dual-cost-label');
   const costEl = document.getElementById('dual-cost-num');
-  const sec2   = document.getElementById('picker-card2-section');
   const prevBtn= document.getElementById('preview-btn');
+  const status2 = document.getElementById('card2-pick-status');
   if (S.dualCard) {
-    if (knob)  { knob.style.left='21px'; knob.style.background='var(--gold)'; }
-    if (tog)   { tog.style.background='rgba(245,166,35,.2)'; tog.style.borderColor='var(--gold)'; }
-    if (label) { label.style.display='block'; }
-    if (costEl){ costEl.textContent=(S.selectedBet||0)*2; }
-    if (sec2)  { sec2.style.display='block'; }
-    // Build card2 grid with same taken numbers
-    buildNumGrid2(_lastTakenNumbers || []);
+    if (knob)   { knob.style.left='21px'; knob.style.background='var(--gold)'; }
+    if (tog)    { tog.style.background='rgba(245,166,35,.2)'; tog.style.borderColor='var(--gold)'; }
+    if (label)  { label.style.display='block'; }
+    if (costEl) { costEl.textContent=(S.selectedBet||0)*2; }
+    if (status2){ status2.style.display='block'; }
     if (prevBtn) prevBtn.textContent = 'PREVIEW CARDS →';
+    // Re-render grid to show dual-pick mode
+    buildNumGrid(_lastTakenNumbers || []);
   } else {
-    if (knob)  { knob.style.left='1px'; knob.style.background='#888'; }
-    if (tog)   { tog.style.background='var(--surface3)'; tog.style.borderColor='var(--border)'; }
-    if (label) { label.style.display='none'; }
-    if (sec2)  { sec2.style.display='none'; }
+    if (knob)   { knob.style.left='1px'; knob.style.background='#888'; }
+    if (tog)    { tog.style.background='var(--surface3)'; tog.style.borderColor='var(--border)'; }
+    if (label)  { label.style.display='none'; }
+    if (status2){ status2.style.display='none'; }
     S.pickedNumber2 = null;
     if (prevBtn) prevBtn.textContent = 'PREVIEW CARD →';
+    buildNumGrid(_lastTakenNumbers || []);
   }
 }
 
@@ -1650,12 +1656,13 @@ async function enterPickerForGame(gameId) {
   S.dualCard      = false;
   // Reset dual toggle UI
   const knob=document.getElementById('dual-knob'), tog=document.getElementById('dual-toggle');
-  const lbl=document.getElementById('dual-cost-label'), sec2=document.getElementById('picker-card2-section');
+  const lbl=document.getElementById('dual-cost-label');
+  const status2=document.getElementById('card2-pick-status');
   const prevBtn=document.getElementById('preview-btn');
   if(knob){knob.style.left='1px';knob.style.background='#888';}
   if(tog){tog.style.background='var(--surface3)';tog.style.borderColor='var(--border)';}
   if(lbl)lbl.style.display='none';
-  if(sec2)sec2.style.display='none';
+  if(status2)status2.style.display='none';
   if(prevBtn)prevBtn.textContent='PREVIEW CARD →';
   document.getElementById('picker-chosen-panel').style.display = 'none';
 }
@@ -1671,8 +1678,14 @@ function buildNumGrid(taken = []) {
   grid.innerHTML = '';
   for (let i = 1; i <= 100; i++) {
     const isTaken = taken.includes(i);
+    const isCard1 = S.pickedNumber === i;
+    const isCard2 = S.dualCard && S.pickedNumber2 === i;
+    let cls = 'num-cell';
+    if (isTaken) cls += ' taken';
+    else if (isCard1) cls += ' chosen';
+    if (isCard2) cls += ' chosen2';
     const div = document.createElement('div');
-    div.className = 'num-cell' + (isTaken ? ' taken' : '');
+    div.className = cls;
     div.textContent = i;
     div.dataset.num = i;
     if (!isTaken) div.onclick = () => pickNumber(i, div);
@@ -1680,35 +1693,31 @@ function buildNumGrid(taken = []) {
   }
 }
 
-function buildNumGrid2(taken = []) {
-  const grid = document.getElementById('num-grid-2');
-  if (!grid) return;
-  grid.innerHTML = '';
-  for (let i = 1; i <= 100; i++) {
-    const isTaken = taken.includes(i);
-    const div = document.createElement('div');
-    div.className = 'num-cell' + (isTaken ? ' taken' : '') + (S.pickedNumber2===i ? ' chosen' : '');
-    div.textContent = i;
-    div.dataset.num = i;
-    if (!isTaken) div.onclick = () => pickNumber2(i, div);
-    grid.appendChild(div);
-  }
-}
-
 function pickNumber(n, el) {
-  document.querySelectorAll('#num-grid .num-cell').forEach(c=>c.classList.remove('chosen'));
-  el.classList.add('chosen');
+  if (S.dualCard && S.pickedNumber && S.pickedNumber !== n) {
+    // First card already picked — this tap picks card 2
+    // (unless they tap card1's number again to deselect it)
+    if (S.pickedNumber2 === n) {
+      // Deselect card2
+      S.pickedNumber2 = null;
+      document.getElementById('chosen-num2-display').textContent = '—';
+      const hint = document.getElementById('card2-pick-hint');
+      if (hint) hint.style.display = 'inline';
+    } else {
+      S.pickedNumber2 = n;
+      document.getElementById('chosen-num2-display').textContent = n;
+      const hint = document.getElementById('card2-pick-hint');
+      if (hint) hint.style.display = 'none';
+    }
+    buildNumGrid(_lastTakenNumbers);
+    return;
+  }
+  // Pick / re-pick card 1
+  if (S.pickedNumber2 === n) S.pickedNumber2 = null; // can't use same number for both
   S.pickedNumber = n;
   document.getElementById('chosen-num-display').textContent = n;
   document.getElementById('picker-chosen-panel').style.display = 'block';
-}
-
-function pickNumber2(n, el) {
-  document.querySelectorAll('#num-grid-2 .num-cell').forEach(c=>c.classList.remove('chosen'));
-  el.classList.add('chosen');
-  S.pickedNumber2 = n;
-  document.getElementById('chosen-num2-display').textContent = n;
-  document.getElementById('picker-chosen2-panel').style.display = 'block';
+  buildNumGrid(_lastTakenNumbers);
 }
 
 async function goToPreview() {
@@ -1777,12 +1786,15 @@ function renderOnePreviewCard(elId, card, pickedNum) {
 }
 
 function changePreviewNum(cardNum) {
-  showScreen('screen-picker');
   if (cardNum === 2) {
-    // scroll to card 2 section
-    const sec = document.getElementById('picker-card2-section');
-    if (sec) sec.scrollIntoView({ behavior: 'smooth' });
+    // Deselect card2 number and go back to picker
+    S.pickedNumber2 = null;
+    document.getElementById('chosen-num2-display').textContent = '—';
+    const hint = document.getElementById('card2-pick-hint');
+    if (hint) hint.style.display = 'inline';
+    buildNumGrid(_lastTakenNumbers);
   }
+  showScreen('screen-picker');
 }
 
 function renderCardPreview(card, pickedNum) {
