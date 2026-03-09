@@ -1894,9 +1894,18 @@ def start_bot_thread():
     logger.info('[Bot] Daemon thread launched.')
 
 # ── Runs on import by Gunicorn AND by direct `python app.py` ─────────────────
-init_db()       # create tables if not exist
-GameEngine()    # start number-calling background thread
-start_bot_thread()  # start telegram bot daemon thread
+# IMPORTANT: init_db() can block for several seconds on a cold PostgreSQL
+# connection. Running it in the main thread delays Gunicorn from binding to
+# its port, causing Render's port scanner to time out ("No open HTTP ports").
+# Solution: defer ALL startup into a background thread so Gunicorn binds
+# immediately, Render detects the port, and DB + bot start in the background.
+def _deferred_startup():
+    time.sleep(1)          # tiny yield so Gunicorn workers finish binding first
+    init_db()              # create/migrate tables
+    GameEngine()           # start number-calling background thread
+    start_bot_thread()     # start telegram bot daemon thread
+
+threading.Thread(target=_deferred_startup, daemon=True, name='Startup').start()
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  ENTRY POINT  (python app.py — local dev only)
