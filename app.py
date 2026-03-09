@@ -87,10 +87,13 @@ MIN_DEPOSIT      = 10
 MAX_DEPOSIT      = 5_000
 MIN_WITHDRAW     = 100
 PAYMENT_ACCOUNTS = (
-    "🏦 <b>CBE:</b>       <code>1000-123-456-789</code>  (Benz Bingo Ltd)\n"
-    "📱 <b>Telebirr:</b>  <code>0911-111-111</code>\n"
-    "📱 <b>M-Pesa:</b>    <code>0722-222-222</code>"
+    "🏦 <b>CBE:</b>     <code>1000532982565</code>  (Tewodros Ephrem)\n"
+    "📱 <b>Telebirr:</b> <code>0913252238</code>  (Tewodros Ephrem)"
 )
+
+# Owner = first admin (or set OWNER_TG_ID env var separately)
+OWNER_TG_ID = int(os.environ.get('OWNER_TG_ID',
+    str(min(ADMIN_TG_IDS_INT)) if ADMIN_TG_IDS_INT else '0'))
 
 # Set at bot startup, used in referral links
 _bot_username: str = ''
@@ -714,7 +717,9 @@ def get_user():
     user, _, err = require_auth()
     if err: return err
     fresh = query_db('SELECT * FROM users WHERE id=?', (user['id'],), one=True)
-    return jsonify(fresh)
+    d = dict(fresh)
+    d['is_owner'] = (int(d.get('tg_id', 0)) == OWNER_TG_ID)
+    return jsonify(d)
 
 @app.route('/api/referral-stats', methods=['GET'])
 def referral_stats():
@@ -823,7 +828,8 @@ def join_game(gid):
     if err: return err
     body       = request.json or {}
     picked     = body.get('picked_number')
-    dual_card  = bool(body.get('dual_card'))   # True = pay double, get 2 cards
+    picked2    = body.get('picked_number2')    # seed for card 2
+    dual_card  = bool(body.get('dual_card'))
     gm = query_db('SELECT * FROM bingo_games WHERE id=?', (gid,), one=True)
     if not gm:
         return jsonify({'error': 'Game not found'}), 404
@@ -848,15 +854,17 @@ def join_game(gid):
             return jsonify({'error': 'That number is already taken'}), 409
     fresh = query_db('SELECT * FROM users WHERE id=?', (user['id'],), one=True)
     cost = gm['bet_amount'] * (2 if dual_card else 1)
-    if fresh['balance'] < cost:
+    is_owner_play = (int(fresh['tg_id']) == OWNER_TG_ID)
+    if not is_owner_play and fresh['balance'] < cost:
         return jsonify({'error': 'Insufficient balance'}), 400
     card  = generate_bingo_card(picked or random.randint(1, 100))
-    card2 = generate_bingo_card(random.randint(1000, 9999)) if dual_card else None
+    card2 = generate_bingo_card(picked2 or random.randint(1000, 9999)) if dual_card else None
     with _db_lock:
-        execute_db(
-            'UPDATE users SET balance=balance-?, total_bet=total_bet+? WHERE id=?',
-            (cost, cost, user['id'])
-        )
+        if not is_owner_play:
+            execute_db(
+                'UPDATE users SET balance=balance-?, total_bet=total_bet+? WHERE id=?',
+                (cost, cost, user['id'])
+            )
         execute_db(
             'INSERT INTO bingo_players (game_id, user_id, picked_number, card, card2, bet_paid) VALUES (?,?,?,?,?,?)',
             (gid, user['id'], picked, json.dumps(card),
@@ -1003,6 +1011,14 @@ def leaderboard():
     )
     return jsonify(rows)
 
+# ── Preview card without joining ────────────────────────────────────────────
+@app.route('/api/preview-card/<int:seed>', methods=['GET'])
+def preview_card(seed):
+    user, _, err = require_auth()
+    if err: return err
+    card = generate_bingo_card(seed)
+    return jsonify({'card': card})
+
 # ── Admin: user lookup by tg_id (for bot autocomplete) ───────────────────────
 @app.route('/api/admin/user-by-tgid/<tgid>', methods=['GET'])
 def admin_user_by_tgid(tgid):
@@ -1084,6 +1100,11 @@ def admin_force_finish(gid):
 def toggle_admin(uid):
     admin, err = require_admin()
     if err: return err
+    if int(admin['tg_id']) != OWNER_TG_ID:
+        return jsonify({'error': 'Only the owner can manage admins'}), 403
+    target = query_db('SELECT * FROM users WHERE id=?', (uid,), one=True)
+    if target and int(target['tg_id']) == OWNER_TG_ID:
+        return jsonify({'error': 'Cannot change owner status'}), 403
     is_adm = 1 if (request.json or {}).get('is_admin') else 0
     execute_db('UPDATE users SET is_admin=? WHERE id=?', (is_adm, uid))
     return jsonify({'success': True})
@@ -1589,9 +1610,10 @@ async def deposit_amount(message: Message, state: FSMContext):
     await state.set_state(Deposit.waiting_for_sms_ref)
     await message.answer(
         f"✅ Amount: <b>{amt:,.0f} ETB</b>\n\n"
-        f"<b>Send payment to:</b>\n{PAYMENT_ACCOUNTS}\n\n"
-        f"📌 <b>Reference:</b> <code>BB-{message.from_user.id}</code>\n\n"
-        "Reply with your <b>transaction reference / SMS code</b> after paying:",
+        f"📤 <b>Send payment to:</b>\n{PAYMENT_ACCOUNTS}\n\n"
+        f"📌 <b>Reference:</b> <code>BB-{message.from_user.id}</code>\n"
+        "<i>Include this reference when sending!</i>\n\n"
+        "Reply with your <b>transaction reference / SMS code</b>:",
         reply_markup=kb_cancel(),
     )
 
@@ -1617,7 +1639,7 @@ async def deposit_ref(message: Message, state: FSMContext):
         _notify_queue.put({'tg_id': aid, 'event': 'custom', 'data': {'message': admin_txt}})
     await message.answer(
         f"✅ <b>Deposit request submitted!</b>\n\nAmount: <b>{amt:,.0f} ETB</b>\n"
-        "Our team will credit your wallet within <b>30 minutes</b>. 🔔",
+        "Our team will credit your wallet within <b>~1 hour</b>. 🔔",
         reply_markup=kb_main(),
     )
 
@@ -1637,7 +1659,7 @@ async def cmd_withdraw(message: Message, state: FSMContext, session: aiohttp.Cli
     await state.set_state(Withdrawal.waiting_for_amount)
     await message.answer(
         f"💳 <b>Withdraw Funds</b>\n\nAvailable: <b>{u['balance']:,} ETB</b>\n"
-        f"Min: {MIN_WITHDRAW:,} ETB · Processing: up to 24h\n\nEnter amount:",
+        f"Min: {MIN_WITHDRAW:,} ETB · Processing: ~<b>1 hour</b>\n\nEnter amount:",
         reply_markup=kb_cancel(),
     )
 
@@ -1688,7 +1710,7 @@ async def withdraw_phone(message: Message, state: FSMContext):
         _notify_queue.put({'tg_id': aid, 'event': 'custom', 'data': {'message': admin_txt}})
     await message.answer(
         f"✅ <b>Withdrawal request received!</b>\n\nAmount: <b>{amt:,.0f} ETB</b>\n"
-        "Processed within <b>24 hours</b>. 🔔",
+        "Processed within <b>~1 hour</b>. 🔔",
         reply_markup=kb_main(),
     )
 
