@@ -592,11 +592,32 @@ body::before {
 }
 
 /* Bottom: bingo card section */
-.game-card-header {
-  display:flex; align-items:center; justify-content:space-between;
-  flex-shrink:0;
+#cards-area {
+  flex: 1 1 0; min-height: 0;
+  display: flex; gap: 6px; align-items: stretch;
 }
-.game-card-title { font-family:'Orbitron',monospace; font-size:12px; color:var(--gold); font-weight:700; }
+.card-slot {
+  flex: 1; min-width: 0;
+  display: flex; flex-direction: column; gap: 3px;
+}
+.card-slot-header {
+  display: flex; align-items: center; justify-content: space-between;
+  flex-shrink: 0; padding: 0 2px;
+}
+.game-card-header { display:flex; align-items:center; justify-content:space-between; flex-shrink:0; }
+.game-card-title { font-family:'Orbitron',monospace; font-size:11px; color:var(--gold); font-weight:700; }
+/* Game card fills its container height */
+.bingo-card-grid.game-card {
+  max-width: none; margin: 0;
+  flex: 1; min-height: 0;
+  display: grid !important;
+  grid-template-columns: repeat(5, 1fr);
+  grid-template-rows: auto repeat(5, 1fr);
+}
+.bingo-card-grid.game-card .bc-cell { aspect-ratio: unset; min-height: 0; }
+/* Dual mode — smaller text */
+#cards-area:not(.single) .bc-header { font-size: 13px; padding: 5px 2px; }
+#cards-area:not(.single) .bc-cell   { font-size: 9px; }
 #bingo-claim-btn {
   display:none;
   animation: bingo-pulse .6s ease infinite alternate;
@@ -842,12 +863,13 @@ body::before {
         </div>
         <div class="num-grid" id="num-grid"></div>
       </div>
+      <!-- chosen panel for card 1 -->
       <div class="card slide-up" id="picker-chosen-panel" style="display:none">
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
           <div style="font-family:'Orbitron',monospace;font-size:36px;font-weight:900;color:var(--gold)" id="chosen-num-display">—</div>
           <div style="flex:1">
-            <div style="font-size:12px;color:var(--text2)">Lucky Number Selected!</div>
-            <div style="font-size:11px;color:var(--text3);margin-top:2px">Tap to generate your BINGO card</div>
+            <div style="font-size:13px;font-weight:700;color:var(--text)">Card 1 Lucky Number</div>
+            <div style="font-size:11px;color:var(--text3);margin-top:2px">Tap another to change</div>
           </div>
         </div>
         <!-- Dual card toggle -->
@@ -863,26 +885,49 @@ body::before {
           </div>
           <div id="dual-cost-label" style="display:none;font-size:11px;color:var(--gold);margin-top:8px;text-align:center">Cost: <span id="dual-cost-num">—</span> ETB (×2)</div>
         </div>
-        <button class="btn btn-gold" onclick="generateAndPreview()">GENERATE MY CARD →</button>
+        <button class="btn btn-gold" id="preview-btn" onclick="goToPreview()">PREVIEW CARD →</button>
       </div>
+
+      <!-- Card 2 picker (shown when dual is toggled on) -->
+      <div class="card slide-up" id="picker-card2-section" style="display:none">
+        <div class="card-title" style="font-size:13px;margin-bottom:10px">🃏 Pick Lucky Number for Card 2</div>
+        <div style="font-size:11px;color:var(--text2);margin-bottom:10px">Pick a different number — each generates a unique card.</div>
+        <div class="num-grid" id="num-grid-2"></div>
+        <div id="picker-chosen2-panel" style="display:none;margin-top:12px">
+          <div style="display:flex;align-items:center;gap:10px">
+            <div style="font-family:'Orbitron',monospace;font-size:28px;font-weight:900;color:var(--green)" id="chosen-num2-display">—</div>
+            <div style="font-size:12px;color:var(--text2)">Card 2 Lucky Number ✓</div>
+          </div>
+        </div>
+      </div>
+
       <button class="btn btn-ghost" style="margin-top:4px" onclick="showScreen('screen-lobby')">← Back to Lobby</button>
     </div>
 
     <!-- ── CARD PREVIEW ── -->
     <div class="screen" id="screen-card-preview">
       <div class="card card-gold fade-in">
-        <div class="card-title">🃏 Your BINGO Card</div>
-        <div style="font-size:12px;color:var(--text2);margin-bottom:14px">
-          <span style="color:var(--blue)">Blue highlighted</span> = your lucky number · <span style="color:var(--gold)">Gold</span> = FREE space
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <div class="card-title" style="margin:0" id="preview-title">🃏 Your BINGO Card</div>
+          <span style="font-size:10px;color:var(--text3)"><span style="color:var(--blue)">Blue</span>=lucky · <span style="color:var(--gold)">Gold</span>=FREE</span>
         </div>
-        <div class="bingo-card-grid" id="preview-card-grid"></div>
+        <!-- Single or dual preview -->
+        <div id="preview-cards-wrap" style="display:flex;gap:8px;align-items:flex-start">
+          <div style="flex:1;min-width:0">
+            <div id="preview-card1-label" style="font-size:10px;font-weight:700;color:var(--gold);text-align:center;margin-bottom:4px;display:none">CARD 1</div>
+            <div class="bingo-card-grid" id="preview-card-grid"></div>
+            <button class="btn btn-ghost btn-sm" style="margin-top:6px;width:100%;font-size:10px" onclick="changePreviewNum(1)">🔄 Change Number</button>
+          </div>
+          <div id="preview-card2-wrap" style="flex:1;min-width:0;display:none">
+            <div style="font-size:10px;font-weight:700;color:var(--green);text-align:center;margin-bottom:4px">CARD 2</div>
+            <div class="bingo-card-grid" id="preview-card2-grid"></div>
+            <button class="btn btn-ghost btn-sm" style="margin-top:6px;width:100%;font-size:10px" onclick="changePreviewNum(2)">🔄 Change Number</button>
+          </div>
+        </div>
       </div>
       <div class="card slide-up">
-        <div style="margin-bottom:10px;font-size:12px;color:var(--text2)">Happy with your card? Press Proceed to enter the game room!</div>
-        <div class="btn-row">
-          <button class="btn btn-ghost" onclick="showScreen('screen-picker')">← Cancel</button>
-          <button class="btn btn-gold" onclick="proceedToGame()">PROCEED →</button>
-        </div>
+        <div style="margin-bottom:10px;font-size:12px;color:var(--text2)" id="preview-proceed-msg">Happy with your card? Press Proceed to enter the game!</div>
+        <button class="btn btn-gold" onclick="proceedToGame()">PROCEED →</button>
       </div>
     </div>
 
@@ -924,22 +969,26 @@ body::before {
 
       <!-- BOTTOM HALF -->
       <div class="game-bottom">
-        <div class="game-card-header">
-          <div class="game-card-title" id="game-card-title-label">MY BINGO CARD</div>
-          <button class="btn btn-green btn-sm" id="bingo-claim-btn" onclick="doClaim(1)">🎉 BINGO!</button>
-        </div>
-        <!-- Single or dual card area -->
-        <div id="cards-area" style="display:flex;gap:6px;overflow-x:auto;min-height:0;flex:1">
-          <div style="flex:1;min-width:0">
-            <div class="bingo-card-grid" id="game-card-grid" style="width:100%"></div>
+        <!-- Cards area fills all remaining height -->
+        <div id="cards-area" class="single">
+          <!-- Card 1 -->
+          <div class="card-slot" id="card1-slot">
+            <div class="card-slot-header">
+              <span class="game-card-title" id="game-card-title-label">MY BINGO CARD</span>
+              <button class="btn btn-green btn-sm" id="bingo-claim-btn" onclick="doClaim(1)">🎉 BINGO!</button>
+            </div>
+            <div class="bingo-card-grid game-card" id="game-card-grid"></div>
           </div>
-          <div id="card2-area" style="flex:1;min-width:0;display:none">
-            <div style="font-size:9px;font-weight:700;color:var(--gold);text-align:center;margin-bottom:2px;letter-spacing:1px">CARD 2</div>
-            <div class="bingo-card-grid" id="game-card2-grid" style="width:100%"></div>
-            <button class="btn btn-green btn-sm" style="margin-top:4px;width:100%;font-size:10px" onclick="doClaim(2)">🎉 BINGO! (Card 2)</button>
+          <!-- Card 2 (dual mode only) -->
+          <div class="card-slot" id="card2-area" style="display:none">
+            <div class="card-slot-header">
+              <span class="game-card-title" style="color:var(--green)">CARD 2</span>
+              <button class="btn btn-green btn-sm" style="font-size:9px;padding:4px 8px" onclick="doClaim(2)">🎉 BINGO!</button>
+            </div>
+            <div class="bingo-card-grid game-card" id="game-card2-grid"></div>
           </div>
         </div>
-        <button class="btn btn-ghost btn-sm" style="margin-top:4px;font-size:11px" onclick="confirmLeave()">Leave Game</button>
+        <button class="btn btn-ghost btn-sm" style="flex-shrink:0;font-size:11px;margin-top:4px" onclick="confirmLeave()">Leave Game</button>
       </div>
     </div>
 
@@ -1066,6 +1115,16 @@ body::before {
         <div id="admin-games-list"></div>
         <button class="btn btn-ghost" style="margin-top:8px" onclick="loadAdminGames()">↻ Refresh</button>
       </div>
+      <div class="card fade-in" id="admin-manage-admins-card" style="display:none">
+        <div class="card-title" style="color:var(--gold)">👑 Manage Admins <span style="font-size:10px;color:var(--text3)">(Owner only)</span></div>
+        <div style="font-size:11px;color:var(--text2);margin-bottom:10px">Promoted admins can approve deposits/withdrawals but cannot promote others.</div>
+        <label class="label">Username to Promote / Demote</label>
+        <input class="input" id="admin-promote-uname" placeholder="Enter BB username" list="admin-uname-list" autocomplete="off">
+        <div style="display:flex;gap:8px;margin-top:10px">
+          <button class="btn btn-gold" style="flex:1" onclick="adminSetAdmin(true)">👑 Make Admin</button>
+          <button class="btn btn-ghost" style="flex:1" onclick="adminSetAdmin(false)">🚫 Remove Admin</button>
+        </div>
+      </div>
       <div class="card fade-in">
         <div class="card-title">👥 All Users</div>
         <div id="admin-users-list"></div>
@@ -1130,7 +1189,10 @@ const S = {
   myMarked:     [[2,2]], // [[r,c],...] card 1
   myMarked2:    [[2,2]], // card 2 marks
   dualCard:     false,   // player chose dual card option
-  pickedNumber: null,
+  pickedNumber:  null,
+  pickedNumber2:  null,  // for dual card 2
+  previewCard:    null,  // card being previewed before join
+  previewCard2:   null,
   isLightMode:  false,
   gamePolling:  null,
   lobbyPolling: null,
@@ -1480,15 +1542,24 @@ function toggleDual() {
   const tog    = document.getElementById('dual-toggle');
   const label  = document.getElementById('dual-cost-label');
   const costEl = document.getElementById('dual-cost-num');
+  const sec2   = document.getElementById('picker-card2-section');
+  const prevBtn= document.getElementById('preview-btn');
   if (S.dualCard) {
     if (knob)  { knob.style.left='21px'; knob.style.background='var(--gold)'; }
     if (tog)   { tog.style.background='rgba(245,166,35,.2)'; tog.style.borderColor='var(--gold)'; }
     if (label) { label.style.display='block'; }
     if (costEl){ costEl.textContent=(S.selectedBet||0)*2; }
+    if (sec2)  { sec2.style.display='block'; }
+    // Build card2 grid with same taken numbers
+    buildNumGrid2(_lastTakenNumbers || []);
+    if (prevBtn) prevBtn.textContent = 'PREVIEW CARDS →';
   } else {
     if (knob)  { knob.style.left='1px'; knob.style.background='#888'; }
     if (tog)   { tog.style.background='var(--surface3)'; tog.style.borderColor='var(--border)'; }
     if (label) { label.style.display='none'; }
+    if (sec2)  { sec2.style.display='none'; }
+    S.pickedNumber2 = null;
+    if (prevBtn) prevBtn.textContent = 'PREVIEW CARD →';
   }
 }
 
@@ -1558,24 +1629,44 @@ async function enterPickerForGame(gameId) {
     takenNumbers = gm.players.map(p=>p.picked_number).filter(Boolean);
     // Check if already joined
     if (gm.my_player) {
-      S.myCard   = gm.my_player.card;
-      S.myMarked = gm.my_player.marked_cells;
+      S.myCard    = gm.my_player.card;
+      S.myCard2   = gm.my_player.card2 || null;
+      S.myMarked  = gm.my_player.marked_cells;
+      S.myMarked2 = gm.my_player.marked2 || [[2,2]];
+      S.dualCard  = !!gm.my_player.card2;
       showScreen('screen-card-preview');
-      renderCardPreview(S.myCard, null);
+      renderPreviewBoth();
       return;
     }
   } catch (_) {}
 
+  _lastTakenNumbers = takenNumbers;
   buildNumGrid(takenNumbers);
   showScreen('screen-picker');
-  S.pickedNumber = null;
+  S.pickedNumber  = null;
+  S.pickedNumber2 = null;
+  S.previewCard   = null;
+  S.previewCard2  = null;
+  S.dualCard      = false;
+  // Reset dual toggle UI
+  const knob=document.getElementById('dual-knob'), tog=document.getElementById('dual-toggle');
+  const lbl=document.getElementById('dual-cost-label'), sec2=document.getElementById('picker-card2-section');
+  const prevBtn=document.getElementById('preview-btn');
+  if(knob){knob.style.left='1px';knob.style.background='#888';}
+  if(tog){tog.style.background='var(--surface3)';tog.style.borderColor='var(--border)';}
+  if(lbl)lbl.style.display='none';
+  if(sec2)sec2.style.display='none';
+  if(prevBtn)prevBtn.textContent='PREVIEW CARD →';
   document.getElementById('picker-chosen-panel').style.display = 'none';
 }
 
 /* ══════════════════════════════════════════════════════════
    NUMBER PICKER
 ══════════════════════════════════════════════════════════ */
+let _lastTakenNumbers = [];
+
 function buildNumGrid(taken = []) {
+  _lastTakenNumbers = taken;
   const grid = document.getElementById('num-grid');
   grid.innerHTML = '';
   for (let i = 1; i <= 100; i++) {
@@ -1589,32 +1680,83 @@ function buildNumGrid(taken = []) {
   }
 }
 
+function buildNumGrid2(taken = []) {
+  const grid = document.getElementById('num-grid-2');
+  if (!grid) return;
+  grid.innerHTML = '';
+  for (let i = 1; i <= 100; i++) {
+    const isTaken = taken.includes(i);
+    const div = document.createElement('div');
+    div.className = 'num-cell' + (isTaken ? ' taken' : '') + (S.pickedNumber2===i ? ' chosen' : '');
+    div.textContent = i;
+    div.dataset.num = i;
+    if (!isTaken) div.onclick = () => pickNumber2(i, div);
+    grid.appendChild(div);
+  }
+}
+
 function pickNumber(n, el) {
-  document.querySelectorAll('.num-cell').forEach(c=>c.classList.remove('chosen'));
+  document.querySelectorAll('#num-grid .num-cell').forEach(c=>c.classList.remove('chosen'));
   el.classList.add('chosen');
   S.pickedNumber = n;
   document.getElementById('chosen-num-display').textContent = n;
   document.getElementById('picker-chosen-panel').style.display = 'block';
 }
 
-async function generateAndPreview() {
-  if (!S.pickedNumber) { toast('Pick a number first!', 'error'); return; }
+function pickNumber2(n, el) {
+  document.querySelectorAll('#num-grid-2 .num-cell').forEach(c=>c.classList.remove('chosen'));
+  el.classList.add('chosen');
+  S.pickedNumber2 = n;
+  document.getElementById('chosen-num2-display').textContent = n;
+  document.getElementById('picker-chosen2-panel').style.display = 'block';
+}
+
+async function goToPreview() {
+  if (!S.pickedNumber) { toast('Pick a lucky number first!', 'error'); return; }
+  if (S.dualCard && !S.pickedNumber2) { toast('Pick a lucky number for Card 2!', 'error'); return; }
   try {
-    const res = await api('POST', '/api/games/' + S.currentGameId + '/join', {
-      picked_number: S.pickedNumber
-    });
-    S.myCard   = res.card;
-    S.myMarked = res.marked_cells || [[2,2]];
-    renderCardPreview(S.myCard, S.pickedNumber);
+    const r1 = await api('GET', '/api/preview-card/' + S.pickedNumber);
+    S.previewCard = r1.card;
+    if (S.dualCard) {
+      const r2 = await api('GET', '/api/preview-card/' + S.pickedNumber2);
+      S.previewCard2 = r2.card;
+    } else {
+      S.previewCard2 = null;
+    }
+    renderPreviewBoth();
     showScreen('screen-card-preview');
-  } catch (e) { toast(e.message, 'error'); }
+  } catch (e) { toast(e.message || 'Error generating preview', 'error'); }
 }
 
 /* ══════════════════════════════════════════════════════════
    CARD PREVIEW
 ══════════════════════════════════════════════════════════ */
-function renderCardPreview(card, pickedNum) {
-  const el = document.getElementById('preview-card-grid');
+function renderPreviewBoth() {
+  const card = S.previewCard || S.myCard;
+  const card2 = S.previewCard2 || S.myCard2;
+  const n1 = S.pickedNumber, n2 = S.pickedNumber2;
+  const dual = S.dualCard && !!card2;
+
+  // Title
+  document.getElementById('preview-title').textContent = dual ? '🃏 Your BINGO Cards' : '🃏 Your BINGO Card';
+  // CARD 1 label (only show in dual)
+  document.getElementById('preview-card1-label').style.display = dual ? 'block' : 'none';
+  // Card 2 section
+  document.getElementById('preview-card2-wrap').style.display = dual ? 'flex' : 'none';
+  document.getElementById('preview-card2-wrap').style.flexDirection = 'column';
+
+  renderOnePreviewCard('preview-card-grid', card, n1);
+  if (dual) renderOnePreviewCard('preview-card2-grid', card2, n2);
+
+  const msg = dual
+    ? `Cards generated from numbers ${n1} & ${n2}. Proceed to enter the game!`
+    : `Card generated from number ${n1||'?'}. Proceed to enter the game!`;
+  document.getElementById('preview-proceed-msg').textContent = msg;
+}
+
+function renderOnePreviewCard(elId, card, pickedNum) {
+  const el = document.getElementById(elId);
+  if (!el || !card) return;
   el.innerHTML = '';
   ['B','I','N','G','O'].forEach(l => {
     const h = document.createElement('div');
@@ -1634,22 +1776,64 @@ function renderCardPreview(card, pickedNum) {
   }
 }
 
+function changePreviewNum(cardNum) {
+  showScreen('screen-picker');
+  if (cardNum === 2) {
+    // scroll to card 2 section
+    const sec = document.getElementById('picker-card2-section');
+    if (sec) sec.scrollIntoView({ behavior: 'smooth' });
+  }
+}
+
+function renderCardPreview(card, pickedNum) {
+  S.previewCard = card; S.pickedNumber = pickedNum;
+  renderPreviewBoth();
+}
+
 async function proceedToGame() {
-  showScreen('screen-game');
-  startGameScreen();
+  try {
+    const body = {
+      picked_number: S.pickedNumber,
+      dual_card:     S.dualCard,
+    };
+    if (S.dualCard && S.pickedNumber2) body.picked_number2 = S.pickedNumber2;
+    const res = await api('POST', '/api/games/' + S.currentGameId + '/join', body);
+    if (res.status === 'already_joined' || res.status === 'joined') {
+      S.myCard    = res.card;
+      S.myCard2   = res.card2 || null;
+      S.myMarked  = res.marked_cells || [[2,2]];
+      S.myMarked2 = res.marked2      || [[2,2]];
+    }
+    showScreen('screen-game');
+    startGameScreen();
+  } catch (e) {
+    toast(e.message || 'Could not join — try picking a different number', 'error');
+  }
 }
 
 /* ══════════════════════════════════════════════════════════
    GAME SCREEN
 ══════════════════════════════════════════════════════════ */
 function startGameScreen() {
-  S.prevCalledLen=0;
-  const c2=document.getElementById('card2-area'), tl=document.getElementById('game-card-title-label');
-  if (S.myCard2) { if(c2)c2.style.display='block'; if(tl)tl.textContent='CARD 1'; }
-  else           { if(c2)c2.style.display='none';  if(tl)tl.textContent='MY BINGO CARD'; }
-  const cb=document.getElementById('bingo-claim-btn'); if(cb)cb.style.display='inline-block';
-  renderGameCard(); if(S.myCard2) renderGameCard2();
-  pollGame(); S.gamePolling=setInterval(pollGame,2000);
+  S.prevCalledLen = 0;
+  const c2  = document.getElementById('card2-area');
+  const tl  = document.getElementById('game-card-title-label');
+  const ca  = document.getElementById('cards-area');
+  const cb  = document.getElementById('bingo-claim-btn');
+  if (S.myCard2) {
+    if (c2) c2.style.display = 'flex';
+    if (tl) tl.textContent = 'CARD 1';
+    if (ca) { ca.classList.remove('single'); }
+  } else {
+    if (c2) c2.style.display = 'none';
+    if (tl) tl.textContent = 'MY BINGO CARD';
+    if (ca) { ca.classList.add('single'); }
+  }
+  if (cb) cb.style.display = 'inline-block';
+  renderGameCard();
+  if (S.myCard2) renderGameCard2();
+  pollGame();
+  S.gamePolling = setInterval(pollGame, 2000);
 }
 
 async function pollGame() {
@@ -1662,7 +1846,10 @@ async function pollGame() {
       if (!S.myCard && gm.my_player.card) { S.myCard=gm.my_player.card; renderGameCard(); }
       if (!S.myCard2 && gm.my_player.card2) {
         S.myCard2=gm.my_player.card2; S.dualCard=true;
-        const a=document.getElementById('card2-area'); if(a) a.style.display='block';
+        const a=document.getElementById('card2-area');
+        const ca=document.getElementById('cards-area');
+        if(a){ a.style.display='flex'; }
+        if(ca){ ca.classList.remove('single'); }
         renderGameCard2();
       }
       // Server is source of truth for marks
@@ -1899,6 +2086,9 @@ function goToHistory() { loadHistory(); showScreen('screen-history'); }
 ══════════════════════════════════════════════════════════ */
 async function loadAdmin() {
   loadAdminStats(); loadAdminGames(); loadAdminUsers();
+  // Show owner-only section
+  const adminCard = document.getElementById('admin-manage-admins-card');
+  if (adminCard) adminCard.style.display = S.user?.is_owner ? 'block' : 'none';
 }
 
 async function loadAdminStats() {
@@ -1946,6 +2136,19 @@ async function loadAdminUsers() {
         </div>
       </div>`).join('');
   } catch (_) { el.innerHTML = '<div class="empty">Error loading users.</div>'; }
+}
+
+async function adminSetAdmin(makeAdmin) {
+  const username = (document.getElementById('admin-promote-uname')?.value || '').trim();
+  if (!username) { toast('Enter a username', 'error'); return; }
+  try {
+    const users = await api('GET', '/api/admin/users');
+    const target = users.find(u => u.username === username);
+    if (!target) { toast('User not found', 'error'); return; }
+    await api('POST', `/api/admin/users/${target.id}/admin`, { is_admin: makeAdmin });
+    toast(makeAdmin ? `✅ ${username} is now admin` : `✅ ${username} admin removed`, 'success');
+    loadAdminUsers();
+  } catch(e) { toast(e.message || 'Error', 'error'); }
 }
 
 async function adminAdjust() {
