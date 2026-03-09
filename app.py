@@ -79,7 +79,7 @@ WELCOME_BONUS       = int(os.environ.get('WELCOME_BONUS', 10))
 INTERNAL_SECRET     = os.environ.get('INTERNAL_SECRET', 'changeme-please')
 HOUSE_CUT           = 0.10
 COUNTDOWN_SECS      = 30
-CALL_INTERVAL       = 2
+CALL_INTERVAL       = 4
 BET_AMOUNTS         = [10, 20, 50, 100]
 REFERRAL_BONUS      = 5          # ETB per batch
 REFERRALS_PER_BONUS = 10         # new users per batch
@@ -344,6 +344,7 @@ def init_db():
                 game_id       TEXT    NOT NULL REFERENCES bingo_games(id),
                 user_id       INTEGER NOT NULL REFERENCES users(id),
                 picked_number INTEGER,
+                picked_number2 INTEGER,
                 card          TEXT,
                 card2         TEXT,
                 marked_cells  TEXT    NOT NULL DEFAULT '[[2,2]]',
@@ -381,7 +382,9 @@ def init_db():
                 "ALTER TABLE bingo_players ADD COLUMN IF NOT EXISTS card2 TEXT",
                 "ALTER TABLE bingo_players ADD COLUMN IF NOT EXISTS marked2 TEXT NOT NULL DEFAULT '[[2,2]]'",
                 "ALTER TABLE bingo_players ADD COLUMN IF NOT EXISTS bet_paid INTEGER NOT NULL DEFAULT 1",
+                "ALTER TABLE bingo_players ADD COLUMN IF NOT EXISTS picked_number2 INTEGER",
                 "ALTER TABLE bingo_players ADD COLUMN IF NOT EXISTS kicked INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE bingo_players ADD COLUMN IF NOT EXISTS picked_number2 INTEGER",
             ]
             conn2 = _get_conn()
             try:
@@ -431,6 +434,7 @@ def init_db():
                     game_id       TEXT    NOT NULL,
                     user_id       INTEGER NOT NULL,
                     picked_number INTEGER,
+                picked_number2 INTEGER,
                     card          TEXT,
                     card2         TEXT,
                     marked_cells  TEXT    DEFAULT '[[2,2]]',
@@ -635,20 +639,21 @@ class GameEngine:
                     called = json.loads(g['called_numbers'] or '[]')
                     pool   = json.loads(g['number_pool']   or '[]')
                     if not pool:
-                        # Exhausted — refund all active (non-kicked) players
-                        players = db.query(
+                        remaining = db.query(
                             'SELECT * FROM bingo_players WHERE game_id=? AND kicked=0', (gid,)
                         )
-                        for p in players:
-                            db.run(
-                                'UPDATE users SET balance=balance+? WHERE id=?',
-                                (g['bet_amount'], p['user_id'])
-                            )
-                        db.run(
-                            "UPDATE bingo_games SET status='finished', finished_at=? WHERE id=?",
-                            (now, gid)
-                        )
-                        print(f'[Engine] {gid}: FINISHED (exhausted, refunded)')
+                        if len(remaining) == 1:
+                            sole  = remaining[0]
+                            total = db.query('SELECT COUNT(*) AS c FROM bingo_players WHERE game_id=?',(gid,),one=True)['c']
+                            prize = int(total * g['bet_amount'] * (1 - HOUSE_CUT))
+                            db.run('UPDATE users SET balance=balance+?, wins=wins+1, games_played=games_played+1 WHERE id=?',
+                                   (prize, sole['user_id']))
+                        elif len(remaining) > 1:
+                            for p in remaining:
+                                db.run('UPDATE users SET balance=balance+?, games_played=games_played+1 WHERE id=?',
+                                       (g['bet_amount'], p['user_id']))
+                        db.run("UPDATE bingo_games SET status='finished', finished_at=? WHERE id=?", (now, gid))
+                        print(f'[Engine] {gid}: FINISHED (pool exhausted)')
                         continue
 
                     started  = g['started_at'] or now
@@ -817,7 +822,7 @@ def get_game(gid):
         if gm['status'] == 'countdown' and csat else COUNTDOWN_SECS
     )
     players = query_db(
-        'SELECT u.username, bp.picked_number, bp.has_bingo '
+        'SELECT u.username, bp.picked_number, bp.picked_number2, bp.has_bingo '
         'FROM bingo_players bp JOIN users u ON bp.user_id=u.id WHERE bp.game_id=?', (gid,)
     )
     gm['players']      = players
@@ -865,10 +870,18 @@ def join_game(gid):
         }), 200
     if picked:
         taken = query_db(
-            'SELECT id FROM bingo_players WHERE game_id=? AND picked_number=?', (gid, picked), one=True
+            'SELECT id FROM bingo_players WHERE game_id=? AND (picked_number=? OR picked_number2=?)',
+            (gid, picked, picked), one=True
         )
         if taken:
             return jsonify({'error': 'That number is already taken'}), 409
+    if picked2:
+        taken2 = query_db(
+            'SELECT id FROM bingo_players WHERE game_id=? AND (picked_number=? OR picked_number2=?)',
+            (gid, picked2, picked2), one=True
+        )
+        if taken2:
+            return jsonify({'error': 'Card 2 number is already taken by another player'}), 409
     fresh = query_db('SELECT * FROM users WHERE id=?', (user['id'],), one=True)
     cost = gm['bet_amount'] * (2 if dual_card else 1)
     try:
@@ -886,8 +899,8 @@ def join_game(gid):
                 (cost, cost, user['id'])
             )
         execute_db(
-            'INSERT INTO bingo_players (game_id, user_id, picked_number, card, card2, bet_paid) VALUES (?,?,?,?,?,?)',
-            (gid, user['id'], picked, json.dumps(card),
+            'INSERT INTO bingo_players (game_id, user_id, picked_number, picked_number2, card, card2, bet_paid) VALUES (?,?,?,?,?,?,?)',
+            (gid, user['id'], picked, picked2 if dual_card else None, json.dumps(card),
              json.dumps(card2) if card2 else None, 2 if dual_card else 1)
         )
     return jsonify({
@@ -981,8 +994,28 @@ def claim_bingo(gid):
             )
             execute_db(
                 'INSERT INTO game_history (user_id,game_id,bet_amount,prize_won,won) VALUES (?,?,?,0,0)',
-                (user['id'], gid, gm['bet_amount'])
+                (user['id'], gid, gm['bet_amount'] * prow.get('bet_paid', 1))
             )
+            # Check remaining active players after kick
+            remaining = query_db(
+                'SELECT * FROM bingo_players WHERE game_id=? AND kicked=0', (gid,)
+            )
+            if len(remaining) == 1:
+                sole  = remaining[0]
+                pot2  = query_db('SELECT COUNT(*) AS c FROM bingo_players WHERE game_id=?',(gid,),one=True)['c']
+                prize2 = int(pot2 * gm['bet_amount'] * (1 - HOUSE_CUT))
+                now2  = time.time()
+                execute_many([
+                    ("UPDATE bingo_games SET status='finished', winner_id=?, finished_at=? WHERE id=?",
+                     (sole['user_id'], now2, gid)),
+                    ('UPDATE bingo_players SET has_bingo=1 WHERE id=?', (sole['id'],)),
+                    ('UPDATE users SET balance=balance+?, wins=wins+1, games_played=games_played+1, '
+                     'total_won=total_won+? WHERE id=?', (prize2, prize2, sole['user_id'])),
+                    ('INSERT INTO game_history (user_id,game_id,bet_amount,prize_won,won) VALUES (?,?,?,?,1)',
+                     (sole['user_id'], gid, gm['bet_amount'], prize2)),
+                ])
+                _notify_queue.put({'tg_id': sole['user_id'], 'event': '_last_standing',
+                                   'data': {'prize': prize2}})
             return jsonify({'kicked': True, 'error': 'Wrong BINGO — you have been removed from the game!'}), 200
         # Valid BINGO — count only non-kicked players for pot
         pcount = query_db(
@@ -1008,7 +1041,7 @@ def claim_bingo(gid):
             execute_many([
                 ('UPDATE users SET games_played=games_played+1 WHERE id=?', (lo['user_id'],)),
                 ('INSERT INTO game_history (user_id,game_id,bet_amount,prize_won,won) VALUES (?,?,?,0,0)',
-                 (lo['user_id'], gid, gm['bet_amount'])),
+                 (lo['user_id'], gid, gm['bet_amount'] * lo.get('bet_paid', 1))),
             ])
         fresh = query_db('SELECT * FROM users WHERE id=?', (user['id'],), one=True)
     return jsonify({'winner': True, 'prize': prize, 'user': fresh})
@@ -1157,8 +1190,9 @@ def webapp_deposit_request():
     if not ADMIN_TG_IDS_INT:
         logger.warning('[deposit-request] ADMIN_TG_IDS_INT is empty — set ADMIN_TG_IDS env var')
     for aid in ADMIN_TG_IDS_INT:
-        logger.info(f'[deposit-request] notifying admin {aid}')
-        _notify_queue.put({'tg_id': aid, 'event': 'custom', 'data': {'message': admin_txt}})
+        sent = _tg_notify_direct(aid, admin_txt)
+        if not sent:
+            _notify_queue.put({'tg_id': aid, 'event': 'custom', 'data': {'message': admin_txt}})
     return jsonify({'status': 'submitted'})
 
 @app.route('/api/withdraw-request', methods=['POST'])
@@ -1194,13 +1228,31 @@ def webapp_withdraw_request():
     if not ADMIN_TG_IDS_INT:
         logger.warning('[withdraw-request] ADMIN_TG_IDS_INT is empty — set ADMIN_TG_IDS env var')
     for aid in ADMIN_TG_IDS_INT:
-        logger.info(f'[withdraw-request] notifying admin {aid}')
-        _notify_queue.put({'tg_id': aid, 'event': 'custom', 'data': {'message': admin_txt}})
+        sent = _tg_notify_direct(aid, admin_txt)
+        if not sent:
+            _notify_queue.put({'tg_id': aid, 'event': 'custom', 'data': {'message': admin_txt}})
     return jsonify({'status': 'submitted'})
 
 @app.route('/health')
 def health():
     return jsonify({'status': 'ok', 'db': DB_TYPE})
+
+# ── Direct Telegram notification (bypasses queue — works before bot starts) ──
+def _tg_notify_direct(chat_id: int, text: str) -> bool:
+    if not BOT_TOKEN or not chat_id:
+        return False
+    import urllib.request as _urlreq
+    try:
+        payload = json.dumps({'chat_id': chat_id, 'text': text, 'parse_mode': 'HTML'}).encode()
+        req = _urlreq.Request(
+            f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage',
+            data=payload, headers={'Content-Type': 'application/json'}, method='POST'
+        )
+        _urlreq.urlopen(req, timeout=8)
+        return True
+    except Exception as exc:
+        logger.warning(f'[tg_direct] {chat_id}: {exc}')
+        return False
 
 # ── Internal notify endpoint (bot calls this to push Telegram messages) ────────
 @app.route('/internal/notify', methods=['POST'])
@@ -1236,8 +1288,10 @@ class Deposit(StatesGroup):
     waiting_for_sms_ref = State()
 
 class Withdrawal(StatesGroup):
-    waiting_for_amount = State()
-    waiting_for_phone  = State()
+    waiting_for_amount       = State()
+    waiting_for_bank         = State()
+    waiting_for_phone        = State()
+    waiting_for_account_name = State()
 
 # ── Bot API helper (calls Flask REST API — same host, loopback) ───────────────
 async def bot_api(method: str, path: str, tg_id: int | None = None,
@@ -1463,7 +1517,7 @@ async def cmd_help(message: Message, state: FSMContext):
         '8. Wrong BINGO claim = removed from game!\n'
         '9. Winner takes <b>90% of the pot</b>\n\n'
         '<b>Commands:</b> /start /balance /stats /history /referral /cancel /help\n'
-        '<b>Support:</b> @BenzBingo_Support',
+        '<b>Support:</b> @Tewodros1888',
     )
 
 # /balance ────────────────────────────────────────────────────────────────────
@@ -1701,10 +1755,31 @@ async def withdraw_amount(message: Message, state: FSMContext, session: aiohttp.
     if amt > u['balance']:
         await message.answer(f"⚠️ Insufficient. Available: {u['balance']:,} ETB."); return
     await state.update_data(withdraw_amount=amt)
+    await state.set_state(Withdrawal.waiting_for_bank)
+    await message.answer(
+        f"✅ Amount: <b>{amt:,.0f} ETB</b>\n\nSelect payment method:",
+        reply_markup=ReplyKeyboardMarkup(
+            keyboard=[
+                [KeyboardButton(text='🏦 CBE'), KeyboardButton(text='📱 Telebirr')],
+                [KeyboardButton(text='❌ Cancel')],
+            ],
+            resize_keyboard=True, one_time_keyboard=True,
+        )
+    )
+
+@bot_router.message(Withdrawal.waiting_for_bank, F.text)
+async def withdraw_bank(message: Message, state: FSMContext):
+    if message.text in ('❌ Cancel', '/cancel'):
+        await state.clear()
+        await message.answer('Withdrawal cancelled.', reply_markup=kb_main()); return
+    if '🏦' not in message.text and '📱' not in message.text:
+        await message.answer('⚠️ Please select CBE or Telebirr.'); return
+    bank = 'CBE' if '🏦' in message.text else 'Telebirr'
+    await state.update_data(withdraw_bank=bank)
     await state.set_state(Withdrawal.waiting_for_phone)
     await message.answer(
-        f"📱 Phone number to receive <b>{amt:,.0f} ETB</b>:\n"
-        f"Format: <code>09XXXXXXXX</code>",
+        f"✅ Method: <b>{bank}</b>\n\n"
+        f"Enter your {'CBE account number' if bank=='CBE' else 'Telebirr phone number'}:",
         reply_markup=kb_cancel(),
     )
 
@@ -1713,23 +1788,42 @@ async def withdraw_phone(message: Message, state: FSMContext):
     if message.text in ('❌ Cancel', '/cancel'):
         await state.clear()
         await message.answer('Withdrawal cancelled.', reply_markup=kb_main()); return
-    data  = await state.get_data()
-    amt   = data['withdraw_amount']
-    phone = message.text.strip()
-    await state.clear()
+    await state.update_data(withdraw_phone=message.text.strip())
+    await state.set_state(Withdrawal.waiting_for_account_name)
+    await message.answer(
+        "Enter the <b>account holder name</b> (full name as registered on the account):",
+        reply_markup=kb_cancel(),
+    )
+
+@bot_router.message(Withdrawal.waiting_for_account_name, F.text)
+async def withdraw_account_name(message: Message, state: FSMContext):
+    if message.text in ('❌ Cancel', '/cancel'):
+        await state.clear()
+        await message.answer('Withdrawal cancelled.', reply_markup=kb_main()); return
+    data    = await state.get_data()
+    amt     = data['withdraw_amount']
+    bank    = data.get('withdraw_bank', '—')
+    phone   = data.get('withdraw_phone', '—')
+    aname   = message.text.strip()
     bb_username = data.get('bb_username', '—')
+    await state.clear()
     admin_txt = (
         f"💸 <b>Withdrawal Request</b>\n\n"
         f"BB Username: <b>{bb_username}</b>\n"
         f"TG: <code>{message.from_user.id}</code> (@{message.from_user.username or '—'})\n"
-        f"Amount: <b>{amt:,.0f} ETB</b>\nPhone: <code>{phone}</code>\n"
+        f"Amount: <b>{amt:,.0f} ETB</b>\n"
+        f"Method: <b>{bank}</b>\n"
+        f"Account: <code>{phone}</code> ({aname})\n"
         f"Time: {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC\n\n"
         f"✅ Approve: <code>/adminwithdraw {message.from_user.id} {amt:.0f}</code>"
     )
     for aid in ADMIN_TG_IDS_INT:
-        _notify_queue.put({'tg_id': aid, 'event': 'custom', 'data': {'message': admin_txt}})
+        sent = _tg_notify_direct(aid, admin_txt)
+        if not sent:
+            _notify_queue.put({'tg_id': aid, 'event': 'custom', 'data': {'message': admin_txt}})
     await message.answer(
         f"✅ <b>Withdrawal request received!</b>\n\nAmount: <b>{amt:,.0f} ETB</b>\n"
+        f"Method: <b>{bank}</b> · {phone}\n"
         "Processed within <b>~1 hour</b>. 🔔",
         reply_markup=kb_main(),
     )
@@ -1740,7 +1834,7 @@ async def cmd_support(message: Message):
     await message.answer(
         '🆘 <b>Contact Support</b>\n\n'
         'For help with deposits, withdrawals, or any issue:\n\n'
-        '👉 @BenzBingo_Support\n\n'
+        '👉 @Tewodros1888\n\n'
         'We typically respond within 1–2 hours.',
         reply_markup=kb_main(),
     )
