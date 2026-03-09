@@ -521,19 +521,20 @@ body::before {
   flex-direction:column;
 }
 .game-top {
-  flex:0 0 50%; overflow:hidden;
+  flex:0 0 auto;
   background:var(--bg2);
   border-bottom:1px solid var(--border);
   display:flex; flex-direction:column;
-  padding:12px;
+  padding:6px 10px;
   position:relative;
 }
 .game-bottom {
-  flex:0 0 50%; overflow-y:auto;
+  flex:1 1 0; overflow-y:auto;
   background:var(--bg);
-  padding:10px;
+  padding:8px;
   display:flex; flex-direction:column;
-  gap:8px;
+  gap:6px;
+  min-height:0;
 }
 /* Game top: waiting phase */
 .phase { display:none; flex:1; flex-direction:column; }
@@ -545,12 +546,13 @@ body::before {
 .room-id { font-family:'Orbitron',monospace; font-size:10px; color:var(--text3); }
 /* Countdown */
 .countdown-wrap {
-  flex:1; display:flex; flex-direction:column;
-  align-items:center; justify-content:center; gap:6px;
+  display:flex; flex-direction:row;
+  align-items:center; justify-content:center; gap:10px;
+  padding:4px 0;
 }
 .countdown-timer {
   font-family:'Orbitron',monospace; font-weight:900;
-  font-size:56px; color:var(--gold);
+  font-size:32px; color:var(--gold);
   line-height:1;
   text-shadow: var(--glow-gold);
   animation: timer-pulse 1s ease-in-out infinite;
@@ -565,21 +567,21 @@ body::before {
 }
 .current-call-label { font-size:10px; color:var(--text3); letter-spacing:2px; margin-bottom:2px; }
 .current-call-num {
-  font-family:'Orbitron',monospace; font-weight:900; font-size:52px;
+  font-family:'Orbitron',monospace; font-weight:900; font-size:30px;
   color:var(--green); line-height:1;
   text-shadow:var(--glow-green);
   animation:call-bounce .35s ease;
 }
 @keyframes call-bounce { 0%{transform:scale(1.4)}100%{transform:scale(1)} }
 .called-numbers-wrap {
-  flex:1; overflow:hidden;
-  display:flex; flex-wrap:wrap; gap:4px;
-  align-content:flex-start; padding:4px 0;
+  overflow:hidden;
+  display:flex; flex-wrap:nowrap; gap:3px;
+  padding:2px 0; max-height:36px;
 }
 .cn-bubble {
-  width:30px; height:30px; border-radius:50%;
+  min-width:30px; height:26px; border-radius:6px;
   display:flex; align-items:center; justify-content:center;
-  font-size:10px; font-weight:700;
+  font-size:9px; font-weight:700; padding:0 4px;
   background:var(--surface2); border:1px solid var(--border);
   color:var(--text2); transition:all .3s; flex-shrink:0;
 }
@@ -891,32 +893,31 @@ body::before {
 
         <!-- Waiting / Countdown Phase -->
         <div class="phase" id="phase-waiting">
-          <div class="game-status-bar">
-            <div>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <div style="flex-shrink:0">
               <div class="room-id">ROOM: <span id="game-room-label" style="color:var(--gold)"></span></div>
-              <div class="chip chip-green" style="margin-top:4px"><span class="dot"></span><span id="game-player-count">0 players</span></div>
+              <div class="chip chip-green" style="margin-top:3px;font-size:10px"><span class="dot"></span><span id="game-player-count">0 players</span></div>
             </div>
-            <div id="game-status-chip"></div>
+            <div id="game-status-chip" style="flex-shrink:0"></div>
+            <div class="countdown-wrap" style="flex:1;justify-content:flex-end">
+              <div class="countdown-label" style="font-size:10px">STARTS IN</div>
+              <div class="countdown-timer" id="countdown-display">0:30</div>
+            </div>
           </div>
-          <div class="countdown-wrap">
-            <div class="countdown-timer" id="countdown-display">2:00</div>
-            <div class="countdown-label">Game Starts In</div>
-            <div class="waiting-status" id="waiting-status-msg">⏳ Waiting for another player to join…</div>
-          </div>
+          <div class="waiting-status" id="waiting-status-msg" style="font-size:11px;margin-top:3px">⏳ Waiting for another player to join…</div>
         </div>
 
         <!-- Active Phase -->
         <div class="phase" id="phase-active">
-          <div class="game-status-bar">
-            <div class="chip chip-green"><span class="dot"></span> LIVE</div>
-            <div style="font-size:11px;color:var(--text3)">Called: <span id="called-count" style="color:var(--gold);font-weight:700">0</span>/75</div>
-            <div class="chip chip-blue" style="font-size:10px"><span id="active-player-count">—</span> players</div>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <div class="chip chip-green" style="flex-shrink:0"><span class="dot"></span> LIVE</div>
+            <div style="display:flex;align-items:center;gap:4px;flex-shrink:0">
+              <div class="current-call-label" style="margin:0">CALLED:</div>
+              <div class="current-call-num" id="current-call-num" style="font-size:22px">—</div>
+            </div>
+            <div style="font-size:10px;color:var(--text3);flex-shrink:0"><span id="called-count">0</span>/75 · <span id="active-player-count">—</span>p</div>
+            <div class="called-numbers-wrap" id="called-numbers-wrap" style="flex:1;min-width:100px"></div>
           </div>
-          <div class="current-call-wrap">
-            <div class="current-call-label">LAST CALLED</div>
-            <div class="current-call-num" id="current-call-num">—</div>
-          </div>
-          <div class="called-numbers-wrap" id="called-numbers-wrap"></div>
         </div>
 
       </div>
@@ -971,30 +972,48 @@ body::before {
     <div class="screen" id="screen-deposit">
       <div class="card card-gold fade-in">
         <div class="card-title">💰 Deposit Funds</div>
-        <div id="deposit-payment-info" style="background:var(--surface2);border-radius:10px;padding:12px;margin-bottom:14px;font-size:12px;color:var(--text2);line-height:1.7"></div>
-        <label class="label">Amount (ETB)</label>
-        <input class="input" id="dep-amount" type="number" min="10" max="5000" placeholder="Enter amount (min 10 ETB)">
-        <label class="label" style="margin-top:10px">Transaction Reference / SMS Code</label>
-        <input class="input" id="dep-ref" type="text" placeholder="e.g. TXN123456">
+        <!-- Payment info box -->
+        <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:14px;font-size:12px;color:var(--text2);line-height:2">
+          📱 <b>Send payment to:</b><br>
+          CBE: <span id="dep-cbe" style="font-family:monospace;color:var(--gold);cursor:pointer;font-weight:700" onclick="copyText('1000532982565','CBE number')">1000532982565</span> (Tewodros Ephrem) <span style="font-size:10px;color:var(--text3)" onclick="copyText('1000532982565','CBE number')">📋</span><br>
+          Telebirr: <span id="dep-tel" style="font-family:monospace;color:var(--gold);cursor:pointer;font-weight:700" onclick="copyText('0913252238','Telebirr number')">0913252238</span> (Tewodros Ephrem) <span style="font-size:10px;color:var(--text3)" onclick="copyText('0913252238','Telebirr number')">📋</span><br>
+          Reference: <span id="dep-ref-code" style="font-family:monospace;color:var(--green);font-weight:700;cursor:pointer" onclick="copyText(document.getElementById('dep-ref-code').textContent,'Reference')">BB-…</span> <span style="font-size:10px;color:var(--text3)" onclick="copyText(document.getElementById('dep-ref-code').textContent,'Reference')">📋</span>
+        </div>
+        <label class="label">Your Name (as sent on payment) <span style="color:var(--red)">*</span></label>
+        <input class="input" id="dep-sender-name" type="text" placeholder="e.g. Abebe Kebede" required>
+        <label class="label" style="margin-top:8px">Amount (ETB) <span style="color:var(--red)">*</span></label>
+        <input class="input" id="dep-amount" type="number" min="10" max="5000" placeholder="Min 10 ETB" required>
+        <label class="label" style="margin-top:8px">Transaction Reference / SMS Code <span style="color:var(--red)">*</span></label>
+        <input class="input" id="dep-ref" type="text" placeholder="e.g. TXN123456" required>
         <button class="btn btn-gold" style="margin-top:14px" onclick="submitDeposit()">SUBMIT DEPOSIT REQUEST</button>
-        <button class="btn btn-ghost" style="margin-top:8px" onclick="showScreen('screen-lobby')">← Back</button>
+        <button class="btn btn-ghost" style="margin-top:6px" onclick="showScreen('screen-lobby')">← Back</button>
       </div>
+
     </div>
 
     <!-- ── WITHDRAW ── -->
     <div class="screen" id="screen-withdraw">
       <div class="card card-gold fade-in">
         <div class="card-title">💳 Withdraw Funds</div>
-        <div style="background:var(--surface2);border-radius:10px;padding:12px;margin-bottom:14px;font-size:12px;color:var(--text2);line-height:1.7">
-          Minimum withdrawal: <b>100 ETB</b><br>Processing time: up to <b>24 hours</b>
+        <div style="background:var(--surface2);border-radius:10px;padding:10px;margin-bottom:12px;font-size:12px;color:var(--text2);line-height:1.7">
+          Minimum: <b>100 ETB</b> · Processing: <b>~1 hour</b>
         </div>
-        <label class="label">Amount (ETB)</label>
-        <input class="input" id="wd-amount" type="number" min="100" placeholder="Enter amount (min 100 ETB)">
-        <label class="label" style="margin-top:10px">Phone Number</label>
-        <input class="input" id="wd-phone" type="tel" placeholder="e.g. 0913252238">
+        <label class="label">Payment Method <span style="color:var(--red)">*</span></label>
+        <div style="display:flex;gap:8px;margin-bottom:4px">
+          <div id="wd-bank-cbe" onclick="selectWdBank('CBE')" style="flex:1;border:2px solid var(--border);border-radius:10px;padding:10px;text-align:center;cursor:pointer;transition:all .2s;font-size:13px;font-weight:700">🏦 CBE</div>
+          <div id="wd-bank-telebirr" onclick="selectWdBank('Telebirr')" style="flex:1;border:2px solid var(--border);border-radius:10px;padding:10px;text-align:center;cursor:pointer;transition:all .2s;font-size:13px;font-weight:700">📱 Telebirr</div>
+        </div>
+        <input type="hidden" id="wd-bank">
+        <label class="label" style="margin-top:8px">Account Number <span style="color:var(--red)">*</span></label>
+        <input class="input" id="wd-phone" type="tel" placeholder="e.g. 0913252238 or CBE account">
+        <label class="label" style="margin-top:8px">Account Holder Name <span style="color:var(--red)">*</span></label>
+        <input class="input" id="wd-account-name" type="text" placeholder="Full name on account">
+        <label class="label" style="margin-top:8px">Amount (ETB) <span style="color:var(--red)">*</span></label>
+        <input class="input" id="wd-amount" type="number" min="100" placeholder="Min 100 ETB">
         <button class="btn btn-gold" style="margin-top:14px" onclick="submitWithdraw()">SUBMIT WITHDRAWAL</button>
-        <button class="btn btn-ghost" style="margin-top:8px" onclick="showScreen('screen-lobby')">← Back</button>
+        <button class="btn btn-ghost" style="margin-top:6px" onclick="showScreen('screen-lobby')">← Back</button>
       </div>
+
     </div>
 
     <!-- ── FRIENDS ── -->
@@ -1036,7 +1055,8 @@ body::before {
       <div class="card fade-in">
         <div class="card-title">💰 Adjust Wallet</div>
         <label class="label">Username</label>
-        <input class="input" id="admin-uname" placeholder="Enter username">
+        <input class="input" id="admin-uname" placeholder="Enter username" list="admin-uname-list" autocomplete="off">
+        <datalist id="admin-uname-list"></datalist>
         <label class="label">Amount (+ add  /  − deduct)</label>
         <input class="input" id="admin-amt" type="number" placeholder="e.g. 500 or -200">
         <button class="btn btn-gold" onclick="adminAdjust()">APPLY ADJUSTMENT</button>
@@ -1299,7 +1319,7 @@ function renderNav() {
   const items = [
     { icon:'🎮', label:'Play',           screen:'screen-lobby',       fn:'goToLobby' },
     { icon:'💰', label:'Deposit',        screen:'screen-deposit',     fn:'loadDeposit' },
-    { icon:'💳', label:'Withdraw',       screen:'screen-withdraw',    fn:'' },
+    { icon:'💳', label:'Withdraw',       screen:'screen-withdraw',    fn:'loadWithdraw' },
     { icon:'📨', label:'Invite Friends', screen:'screen-friends',     fn:'loadFriends' },
     { icon:'🏆', label:'Leaderboard',    screen:'screen-leaderboard', fn:'loadLeaderboard' },
     { icon:'📜', label:'History',        screen:'screen-history',     fn:'loadHistory' },
@@ -1328,32 +1348,60 @@ function navTo(screen, fn) {
   showScreen(screen);
 }
 /* ══ DEPOSIT / WITHDRAW / FRIENDS ══════════════════════════════════════ */
+function copyText(txt, label) {
+  if (navigator.clipboard) navigator.clipboard.writeText(txt).then(()=>toast(`${label} copied!`,'success'));
+  else toast(txt,'info');
+}
 function loadDeposit() {
-  const uid = window.Telegram?.WebApp?.initDataUnsafe?.user?.id || 'YOUR_TG_ID';
-  const el  = document.getElementById('deposit-payment-info');
-  if (el) el.innerHTML = `📱 <b>Send payment to:</b><br>CBE: <code>1000123456789</code><br>Telebirr: <code>0913252238</code><br><br>Reference: <code>BB-${uid}</code>`;
+  const uid = window.Telegram?.WebApp?.initDataUnsafe?.user?.id || S.tgUser?.id || 'YOUR_TG_ID';
+  const rc = document.getElementById('dep-ref-code');
+  if (rc) rc.textContent = 'BB-' + uid;
+}
+function loadWithdraw() {}
+function selectWdBank(bank) {
+  document.getElementById('wd-bank').value = bank;
+  const cbe = document.getElementById('wd-bank-cbe');
+  const tel = document.getElementById('wd-bank-telebirr');
+  if (bank==='CBE') {
+    cbe.style.borderColor='var(--gold)'; cbe.style.background='rgba(245,166,35,.1)';
+    tel.style.borderColor='var(--border)'; tel.style.background='';
+  } else {
+    tel.style.borderColor='var(--gold)'; tel.style.background='rgba(245,166,35,.1)';
+    cbe.style.borderColor='var(--border)'; cbe.style.background='';
+  }
 }
 async function submitDeposit() {
-  const amt=(document.getElementById('dep-amount')?.value||'').trim();
-  const ref=(document.getElementById('dep-ref')?.value||'').trim();
+  const name = (document.getElementById('dep-sender-name')?.value||'').trim();
+  const amt  = (document.getElementById('dep-amount')?.value||'').trim();
+  const ref  = (document.getElementById('dep-ref')?.value||'').trim();
+  if (!name) { toast('Enter your name as it appears on the payment','error'); return; }
   if (!amt||parseFloat(amt)<10) { toast('Min deposit is 10 ETB','error'); return; }
-  if (!ref) { toast('Enter transaction reference','error'); return; }
+  if (!ref)  { toast('Enter transaction reference/SMS code','error'); return; }
   try {
-    await api('POST','/api/deposit-request',{amount:parseFloat(amt),reference:ref});
-    toast('✅ Deposit request sent! Credited within 30 min.','success');
-    document.getElementById('dep-amount').value=''; document.getElementById('dep-ref').value='';
+    await api('POST','/api/deposit-request',{amount:parseFloat(amt),reference:ref,sender_name:name});
+    toast('✅ Deposit request sent! Credited within 1 hour.','success');
+    document.getElementById('dep-sender-name').value='';
+    document.getElementById('dep-amount').value='';
+    document.getElementById('dep-ref').value='';
     setTimeout(()=>showScreen('screen-lobby'),2500);
   } catch(e) { toast(e.message||'Error','error'); }
 }
 async function submitWithdraw() {
-  const amt=(document.getElementById('wd-amount')?.value||'').trim();
-  const phone=(document.getElementById('wd-phone')?.value||'').trim();
+  const bank  = (document.getElementById('wd-bank')?.value||'').trim();
+  const phone = (document.getElementById('wd-phone')?.value||'').trim();
+  const aname = (document.getElementById('wd-account-name')?.value||'').trim();
+  const amt   = (document.getElementById('wd-amount')?.value||'').trim();
+  if (!bank)  { toast('Select payment method (CBE or Telebirr)','error'); return; }
+  if (!phone) { toast('Enter account/phone number','error'); return; }
+  if (!aname) { toast('Enter account holder name','error'); return; }
   if (!amt||parseFloat(amt)<100) { toast('Min withdrawal is 100 ETB','error'); return; }
-  if (!phone) { toast('Enter phone number','error'); return; }
   try {
-    await api('POST','/api/withdraw-request',{amount:parseFloat(amt),phone});
-    toast('✅ Withdrawal request sent! Processed within 24h.','success');
-    document.getElementById('wd-amount').value=''; document.getElementById('wd-phone').value='';
+    await api('POST','/api/withdraw-request',{amount:parseFloat(amt),phone,bank,account_name:aname});
+    toast('✅ Withdrawal request sent! Processed within ~1 hour.','success');
+    ['wd-bank','wd-phone','wd-account-name','wd-amount'].forEach(id=>{
+      const el=document.getElementById(id); if(el)el.value='';
+    });
+    selectWdBank(''); // reset selection
     setTimeout(()=>showScreen('screen-lobby'),2500);
   } catch(e) { toast(e.message||'Error','error'); }
 }
@@ -1424,6 +1472,24 @@ async function refreshLobby() {
       if (el) el.textContent = count;
     });
   } catch (_) {}
+}
+
+function toggleDual() {
+  S.dualCard = !S.dualCard;
+  const knob   = document.getElementById('dual-knob');
+  const tog    = document.getElementById('dual-toggle');
+  const label  = document.getElementById('dual-cost-label');
+  const costEl = document.getElementById('dual-cost-num');
+  if (S.dualCard) {
+    if (knob)  { knob.style.left='21px'; knob.style.background='var(--gold)'; }
+    if (tog)   { tog.style.background='rgba(245,166,35,.2)'; tog.style.borderColor='var(--gold)'; }
+    if (label) { label.style.display='block'; }
+    if (costEl){ costEl.textContent=(S.selectedBet||0)*2; }
+  } else {
+    if (knob)  { knob.style.left='1px'; knob.style.background='#888'; }
+    if (tog)   { tog.style.background='var(--surface3)'; tog.style.borderColor='var(--border)'; }
+    if (label) { label.style.display='none'; }
+  }
 }
 
 function selectBet(amount, el) {
@@ -1649,7 +1715,8 @@ function showPhase(id) {
 
 function renderCalledBubbles(called) {
   const wrap = document.getElementById('called-numbers-wrap');
-  wrap.innerHTML = [...called].reverse().map((n, i) =>
+  const last10 = [...called].slice(-10).reverse();
+  wrap.innerHTML = last10.map((n, i) =>
     `<div class="cn-bubble ${i===0?'latest':''}">${n}</div>`
   ).join('');
 }
@@ -1867,8 +1934,11 @@ async function loadAdminUsers() {
   const el = document.getElementById('admin-users-list');
   try {
     const users = await api('GET', '/api/admin/users');
+    // Populate autocomplete datalist
+    const dl = document.getElementById('admin-uname-list');
+    if (dl) dl.innerHTML = users.map(u=>`<option value="${u.username}">${u.username} — ${u.balance.toLocaleString()} ETB</option>`).join('');
     el.innerHTML = users.map(u=>`
-      <div class="user-row">
+      <div class="user-row" onclick="document.getElementById('admin-uname').value='${u.username}'" style="cursor:pointer">
         <div class="u-avatar">${u.username[0].toUpperCase()}</div>
         <div class="u-info">
           <div class="u-name">${u.username} ${u.is_admin?'<span class="u-badge badge-admin">ADMIN</span>':''}</div>
