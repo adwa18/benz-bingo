@@ -92,8 +92,11 @@ PAYMENT_ACCOUNTS = (
 )
 
 # Owner = first admin (or set OWNER_TG_ID env var separately)
-OWNER_TG_ID = int(os.environ.get('OWNER_TG_ID',
-    str(min(ADMIN_TG_IDS_INT)) if ADMIN_TG_IDS_INT else '0'))
+try:
+    OWNER_TG_ID = int(os.environ.get('OWNER_TG_ID',
+        str(min(ADMIN_TG_IDS_INT)) if ADMIN_TG_IDS_INT else '0'))
+except (ValueError, TypeError):
+    OWNER_TG_ID = 0
 
 # Set at bot startup, used in referral links
 _bot_username: str = ''
@@ -718,7 +721,10 @@ def get_user():
     if err: return err
     fresh = query_db('SELECT * FROM users WHERE id=?', (user['id'],), one=True)
     d = dict(fresh)
-    d['is_owner'] = (int(d.get('tg_id', 0)) == OWNER_TG_ID)
+    try:
+        d['is_owner'] = (int(d.get('tg_id', 0)) == OWNER_TG_ID)
+    except (ValueError, TypeError):
+        d['is_owner'] = False
     return jsonify(d)
 
 @app.route('/api/referral-stats', methods=['GET'])
@@ -854,7 +860,10 @@ def join_game(gid):
             return jsonify({'error': 'That number is already taken'}), 409
     fresh = query_db('SELECT * FROM users WHERE id=?', (user['id'],), one=True)
     cost = gm['bet_amount'] * (2 if dual_card else 1)
-    is_owner_play = (int(fresh['tg_id']) == OWNER_TG_ID)
+    try:
+        is_owner_play = (int(fresh['tg_id']) == OWNER_TG_ID)
+    except (ValueError, TypeError):
+        is_owner_play = False
     if not is_owner_play and fresh['balance'] < cost:
         return jsonify({'error': 'Insufficient balance'}), 400
     card  = generate_bingo_card(picked or random.randint(1, 100))
