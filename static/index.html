@@ -78,7 +78,7 @@ body::before {
 }
 
 /* ── LAYOUT SHELL ──────────────────────────────────────── */
-#app { height:100vh; display:flex; flex-direction:column; position:relative; z-index:1; overflow:hidden; }
+#app { height:100vh; height:calc(var(--vh,1vh)*100); display:flex; flex-direction:column; position:relative; z-index:1; overflow:hidden; }
 
 /* ── HEADER ────────────────────────────────────────────── */
 #header {
@@ -525,13 +525,14 @@ body::before {
   background:var(--bg2);
   border-bottom:1px solid var(--border);
   display:flex; flex-direction:column;
-  padding:6px 10px;
+  padding:10px 12px 8px;
+  gap:4px;
   position:relative;
 }
 .game-bottom {
-  flex:1 1 0; overflow-y:auto;
+  flex:1 1 0; overflow:hidden;
   background:var(--bg);
-  padding:6px 8px;
+  padding:6px 8px 4px;
   display:flex; flex-direction:column;
   gap:4px;
   min-height:0;
@@ -595,6 +596,7 @@ body::before {
 #cards-area {
   flex: 1 1 0; min-height: 0;
   display: flex; gap: 6px; align-items: stretch;
+  overflow: hidden;
 }
 .card-slot {
   flex: 1; min-width: 0;
@@ -606,27 +608,33 @@ body::before {
 }
 .game-card-header { display:flex; align-items:center; justify-content:space-between; flex-shrink:0; }
 .game-card-title { font-family:'Orbitron',monospace; font-size:11px; color:var(--gold); font-weight:700; }
-/* Game card fills its container height */
+/* Game card fills available height — responsive to screen size */
 .bingo-card-grid.game-card {
   max-width: none; margin: 0;
-  flex: 0 0 auto;          /* don't stretch — use natural cell sizes */
+  flex: 1; min-height: 0;
   display: grid !important;
   grid-template-columns: repeat(5, 1fr);
+  grid-template-rows: auto repeat(5, 1fr);
+}
+.bingo-card-grid.game-card .bc-header {
+  font-size: clamp(11px, 3.5vw, 18px);
+  padding: clamp(3px, 1vw, 8px) 2px;
 }
 .bingo-card-grid.game-card .bc-cell {
-  aspect-ratio: 1;
-  min-height: 0;
-  font-size: 12px;
+  aspect-ratio: unset;
+  min-height: 0; min-width: 0;
+  font-size: clamp(9px, 3vw, 14px);
 }
-/* Single card — comfortable size */
-#cards-area.single .bingo-card-grid.game-card .bc-cell { font-size: 13px; }
-/* Dual mode — smaller to fit side by side */
-#cards-area:not(.single) .bc-header { font-size: 11px; padding: 4px 2px; }
-#cards-area:not(.single) .bc-cell   { font-size: 9px; }
+/* Single card — slightly larger font */
+#cards-area.single .bingo-card-grid.game-card .bc-cell { font-size: clamp(11px, 3.5vw, 15px); }
+#cards-area.single .bingo-card-grid.game-card .bc-header { font-size: clamp(13px, 4vw, 20px); }
+/* Dual mode */
+#cards-area:not(.single) .bingo-card-grid.game-card .bc-header { font-size: clamp(9px, 2.8vw, 14px); }
+#cards-area:not(.single) .bingo-card-grid.game-card .bc-cell   { font-size: clamp(7px, 2.3vw, 11px); }
 /* Dual card border separation */
 #card2-area {
   border-left: 2px solid var(--gold);
-  padding-left: 6px;
+  padding-left: 5px;
 }
 #bingo-claim-btn {
   display:none;
@@ -943,7 +951,7 @@ body::before {
 
         <!-- Waiting / Countdown Phase -->
         <div class="phase" id="phase-waiting">
-          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
             <div style="flex-shrink:0">
               <div class="room-id">ROOM: <span id="game-room-label" style="color:var(--gold)"></span></div>
               <div class="chip chip-green" style="margin-top:3px;font-size:10px"><span class="dot"></span><span id="game-player-count">0 players</span></div>
@@ -959,7 +967,7 @@ body::before {
 
         <!-- Active Phase -->
         <div class="phase" id="phase-active">
-          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
             <div class="chip chip-green" style="flex-shrink:0"><span class="dot"></span> LIVE</div>
             <div style="display:flex;align-items:center;gap:4px;flex-shrink:0">
               <div class="current-call-label" style="margin:0">CALLED:</div>
@@ -1000,9 +1008,12 @@ body::before {
     <!-- ── RESULT ── -->
     <div class="screen" id="screen-result">
       <div id="result-inner"></div>
-      <div style="padding:0 4px">
-        <button class="btn btn-gold" onclick="showScreen('screen-lobby');refreshLobby()">PLAY AGAIN</button>
-        <button class="btn btn-ghost" style="margin-top:8px" onclick="goToHistory()">View History</button>
+      <div id="result-actions" style="padding:0 4px">
+        <div id="result-replay-btns" style="display:none">
+          <button class="btn btn-gold" style="margin-bottom:8px" onclick="playAgain()">▶ PLAY AGAIN  <span style="font-size:10px;opacity:.8">(same lucky number)</span></button>
+          <button class="btn btn-ghost" style="margin-bottom:8px" onclick="resultChangeLucky()">🔢 CHANGE LUCKY NUMBER</button>
+        </div>
+        <button class="btn btn-ghost" style="margin-top:4px" onclick="goToHistory()">View History</button>
       </div>
     </div>
 
@@ -1179,6 +1190,14 @@ body::before {
 ══════════════════════════════════════════════════════════ */
 // Change this to your deployed backend URL
 const API_BASE = window.location.origin; // same origin if flask serves index.html
+
+// Mobile viewport height fix — prevents card clipping on browsers with chrome
+function _setVh() {
+  document.documentElement.style.setProperty('--vh', window.innerHeight * 0.01 + 'px');
+}
+window.addEventListener('resize', _setVh);
+window.addEventListener('orientationchange', () => setTimeout(_setVh, 200));
+_setVh();
 const BET_AMOUNTS = [10, 20, 50, 100];
 
 /* ══════════════════════════════════════════════════════════
@@ -1198,6 +1217,13 @@ const S = {
   pickedNumber2:  null,  // for dual card 2
   previewCard:    null,  // card being previewed before join
   previewCard2:   null,
+  // Saved after game ends — for Play Again
+  lastBet:        null,
+  lastPickedNum:  null,
+  lastPickedNum2: null,
+  lastCard:       null,
+  lastCard2:      null,
+  lastDual:       false,
   isLightMode:  false,
   gamePolling:  null,
   lobbyPolling: null,
@@ -1494,7 +1520,8 @@ function copyReferralLink() {
 }
 function shareReferralTelegram() {
   const t=document.getElementById('friends-link')?.textContent||'';
-  const url=`https://t.me/share/url?url=${encodeURIComponent(t)}&text=${encodeURIComponent('Join Benz Bingo 🎱 and win ETB!')}`;
+  const msg='Join Benz Bingo 🎱 and win ETB!\n\nበ 10 ብር ቦነስ ጀምሩ! ጓደኛ ሲጋብዙ ሌላ ቦነስ! ይጫወቱ! ያሸንፉ!';
+  const url=`https://t.me/share/url?url=${encodeURIComponent(t)}&text=${encodeURIComponent(msg)}`;
   if(window.Telegram?.WebApp?.openTelegramLink)window.Telegram.WebApp.openTelegramLink(url);
   else window.open(url,'_blank');
 }
@@ -1870,7 +1897,18 @@ async function pollGame() {
       if (gm.my_player.kicked) { clearInterval(S.gamePolling); showResult(false,0,null,true); return; }
     }
 
-    if (gm.status === 'finished') { clearInterval(S.gamePolling); handleGameFinished(gm); return; }
+    if (gm.status === 'finished') {
+      clearInterval(S.gamePolling);
+      // Check if WE are the winner (last standing scenario)
+      if (gm.winner_id && gm.my_player && !gm.my_player.kicked) {
+        const myPlayer = gm.players?.find(p => p.username === S.user?.username);
+        if (myPlayer?.has_bingo || (gm.winner_id === gm.my_player_db_id)) {
+          // handled by handleGameFinished
+        }
+      }
+      handleGameFinished(gm);
+      return;
+    }
 
     if (gm.status === 'waiting' || gm.status === 'countdown') {
       showPhase('phase-waiting');
@@ -1968,6 +2006,13 @@ function checkLocalBingo() {
 
 function updateBingoButton() { /* BINGO button always visible — server validates at claim */ }
 
+async function refreshUser() {
+  try {
+    S.user = await api('GET', '/api/user');
+    renderHeader(); renderNav();
+  } catch(_) {}
+}
+
 async function doClaim(cardId=1) {
   try {
     const res = await api('POST', `/api/games/${S.currentGameId}/claim`, { card_id: cardId });
@@ -2001,9 +2046,16 @@ function hideBingoOverlay() {
 function handleGameFinished(gm) {
   clearInterval(S.gamePolling);
   if (gm.winner_id) {
-    const winner = gm.players.find(p=>p.has_bingo);
-    if (winner && winner.username !== S.user?.username) {
-      showResult(false, 0, winner.username);
+    const winner = gm.players?.find(p => p.has_bingo);
+    const iWon   = winner && winner.username === S.user?.username;
+    if (iWon) {
+      // Already shown via doClaim / bingo overlay — but handle here for poll-based detection
+      refreshUser().then(() => showResult(true, S.user?.balance || 0));
+    } else if (gm.my_player && !gm.my_player.kicked && !winner) {
+      // We're still in game, no winner via bingo — last standing
+      refreshUser().then(() => showResult(false, 0, '__last_standing__'));
+    } else {
+      showResult(false, 0, winner ? winner.username : null);
     }
   } else {
     showResult(false, 0, null);
@@ -2011,6 +2063,15 @@ function handleGameFinished(gm) {
 }
 
 function showResult(won, balance, winnerName, kicked=false) {
+  // Save state for Play Again before clearing
+  if (S.selectedBet && S.pickedNumber) {
+    S.lastBet        = S.selectedBet;
+    S.lastPickedNum  = S.pickedNumber;
+    S.lastPickedNum2 = S.pickedNumber2;
+    S.lastCard       = S.myCard;
+    S.lastCard2      = S.myCard2;
+    S.lastDual       = S.dualCard;
+  }
   const el = document.getElementById('result-inner');
   if (won) {
     el.innerHTML = `<div class="card card-gold win-bg fade-in" style="text-align:center;margin-bottom:12px">
@@ -2018,31 +2079,96 @@ function showResult(won, balance, winnerName, kicked=false) {
       <div class="result-prize">+${(balance||0).toLocaleString()} ETB Balance</div>
       <div class="result-sub">Winnings added to your wallet.</div></div>`;
   } else {
-    const icon = kicked ? '🚫' : '😔';
-    const title= kicked ? 'KICKED!' : 'GAME OVER';
-    const msg  = kicked ? 'False BINGO claim — bet forfeited.' : (winnerName ? winnerName+' got BINGO!' : 'No winner this round.');
-    el.innerHTML = `<div class="card lose-bg fade-in" style="text-align:center;margin-bottom:12px">
-      <div class="result-icon">${icon}</div><div class="result-title" style="color:var(--red)">${title}</div>
+    const icon = kicked ? '🚫' : (winnerName === '__last_standing__' ? '🏆' : '😔');
+    const title= kicked ? 'KICKED!' : (winnerName === '__last_standing__' ? 'YOU WIN!' : 'GAME OVER');
+    const col  = winnerName === '__last_standing__' ? 'var(--green)' : (kicked ? 'var(--red)' : 'var(--red)');
+    const msg  = kicked ? 'False BINGO claim — bet forfeited.'
+               : winnerName === '__last_standing__' ? 'Last player standing — you win the pot!'
+               : (winnerName ? winnerName+' got BINGO!' : 'No winner this round.');
+    el.innerHTML = `<div class="card ${winnerName==='__last_standing__'?'card-gold win-bg':'lose-bg'} fade-in" style="text-align:center;margin-bottom:12px">
+      <div class="result-icon">${icon}</div><div class="result-title" style="color:${col}">${title}</div>
       <div style="font-size:15px;font-weight:700;color:var(--text2);margin-bottom:6px">${msg}</div>
-      <div class="result-sub">Better luck next time!</div></div>`;
+      <div class="result-sub">${winnerName==='__last_standing__'?'Winnings added to your wallet.':'Better luck next time!'}</div></div>`;
   }
+  // Show Play Again button only if we have a saved card
+  const replayBtns = document.getElementById('result-replay-btns');
+  if (replayBtns) replayBtns.style.display = S.lastCard ? 'block' : 'none';
   showScreen('screen-result');
   S.currentGameId=null; S.myCard=null; S.myCard2=null; S.dualCard=false; _countdownStarted=false;
   startLobbyPolling();
 }
 
 let _countdownStarted = false;
+/* Play Again — reuse same card/lucky number in a fresh game */
+async function playAgain() {
+  if (!S.lastBet || !S.lastPickedNum || !S.lastCard) {
+    showScreen('screen-lobby'); refreshLobby(); return;
+  }
+  try {
+    // Create new game
+    const gm = await api('POST', '/api/games', { bet_amount: S.lastBet });
+    // Join with same picked number + card (backend generates card from seed,
+    // so we need to join and replace the card with our saved one server-side — 
+    // workaround: join normally then replace card in state)
+    const body = {
+      picked_number: S.lastPickedNum,
+      dual_card:     S.lastDual,
+    };
+    if (S.lastDual && S.lastPickedNum2) body.picked_number2 = S.lastPickedNum2;
+    const joined = await api('POST', `/api/games/${gm.id}/join`, body);
+    S.currentGameId  = gm.id;
+    S.selectedBet    = S.lastBet;
+    S.pickedNumber   = S.lastPickedNum;
+    S.pickedNumber2  = S.lastPickedNum2;
+    S.dualCard       = S.lastDual;
+    // Use the server-issued card (seeded from same lucky number → same card)
+    S.myCard         = joined.card;
+    S.myCard2        = joined.card2 || null;
+    S.myMarked       = [[2,2]];
+    S.myMarked2      = [[2,2]];
+    showScreen('screen-game');
+    startGameScreen();
+  } catch(e) {
+    toast(e.message || 'Could not start game', 'error');
+    showScreen('screen-lobby'); refreshLobby();
+  }
+}
+
+function resultChangeLucky() {
+  // Clear saved card state so picker starts fresh
+  S.lastCard = null; S.lastCard2 = null;
+  S.pickedNumber = null; S.pickedNumber2 = null;
+  S.previewCard = null; S.previewCard2 = null;
+  if (S.lastBet) S.selectedBet = S.lastBet;
+  // Go to lobby so player can pick a game first, then picker opens
+  showScreen('screen-lobby'); refreshLobby();
+}
+
 function confirmLeave() {
   const warn = document.getElementById('leave-forfeit-warn');
   if (warn) warn.style.display = _countdownStarted ? 'block' : 'none';
   document.getElementById('leave-modal').style.display = 'flex';
 }
-function doLeave(confirmed) {
+async function doLeave(confirmed) {
   document.getElementById('leave-modal').style.display = 'none';
   if (!confirmed) return;
   clearInterval(S.gamePolling);
-  S.gamePolling=null; S.currentGameId=null;
-  S.myCard=null; S.myCard2=null; S.myMarked=[[2,2]]; S.myMarked2=[[2,2]];
+  const gid = S.currentGameId;
+  S.gamePolling=null;
+  // Tell server the player is leaving
+  if (gid) {
+    try {
+      const res = await api('POST', `/api/games/${gid}/leave`, {});
+      if (res.last_standing) {
+        // We were the last one — we won
+        S.currentGameId = gid; // keep so showResult can save state
+        await refreshUser();
+        showResult(false, 0, '__last_standing__');
+        return;
+      }
+    } catch(_) {}
+  }
+  S.currentGameId=null; S.myCard=null; S.myCard2=null; S.myMarked=[[2,2]]; S.myMarked2=[[2,2]];
   S.dualCard=false; _countdownStarted=false;
   showScreen('screen-lobby'); startLobbyPolling();
 }
