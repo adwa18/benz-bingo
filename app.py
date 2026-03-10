@@ -79,7 +79,7 @@ WELCOME_BONUS       = int(os.environ.get('WELCOME_BONUS', 10))
 INTERNAL_SECRET     = os.environ.get('INTERNAL_SECRET', 'changeme-please')
 HOUSE_CUT           = 0.10
 COUNTDOWN_SECS      = 30
-CALL_INTERVAL       = 4
+CALL_INTERVAL       = 3
 BET_AMOUNTS         = [10, 20, 50, 100]
 REFERRAL_BONUS      = 5          # ETB per batch
 REFERRALS_PER_BONUS = 10         # new users per batch
@@ -542,6 +542,10 @@ def generate_bingo_card(seed: int) -> list:
 BINGO_COLS = {0:'B',1:'I',2:'N',3:'G',4:'O'}
 COL_RANGES = {0:(1,15),1:(16,30),2:(31,45),3:(46,60),4:(61,75)}
 
+def _calc_pot(gid: str) -> int:
+    row = query_db('SELECT COALESCE(SUM(bet_paid),0) AS s FROM bingo_players WHERE game_id=?', (gid,), one=True)
+    return int(row['s']) if row else 0
+
 def check_bingo(card: list, marked: list, called: list) -> bool:
     """
     True only if the marked cells form a line AND every non-FREE marked cell
@@ -644,8 +648,8 @@ class GameEngine:
                         )
                         if len(remaining) == 1:
                             sole  = remaining[0]
-                            total = db.query('SELECT COUNT(*) AS c FROM bingo_players WHERE game_id=?',(gid,),one=True)['c']
-                            prize = int(total * g['bet_amount'] * (1 - HOUSE_CUT))
+                            units = db.query('SELECT COALESCE(SUM(bet_paid),0) AS s FROM bingo_players WHERE game_id=?',(gid,),one=True)['s'] or 0
+                            prize = int(int(units) * g['bet_amount'] * (1 - HOUSE_CUT))
                             db.run('UPDATE users SET balance=balance+?, wins=wins+1, games_played=games_played+1 WHERE id=?',
                                    (prize, sole['user_id']))
                         elif len(remaining) > 1:
@@ -827,7 +831,8 @@ def get_game(gid):
     )
     gm['players']      = players
     gm['player_count'] = len(players)
-    gm['pot']          = gm['player_count'] * gm['bet_amount']
+    _pot_units = query_db('SELECT COALESCE(SUM(bet_paid),0) AS s FROM bingo_players WHERE game_id=?', (gid,), one=True)
+    gm['pot']   = int((_pot_units['s'] or 0)) * gm['bet_amount']
     gm['prize']        = int(gm['pot'] * (1 - HOUSE_CUT))
     prow = query_db(
         'SELECT * FROM bingo_players WHERE game_id=? AND user_id=?', (gid, user['id']), one=True
@@ -910,6 +915,50 @@ def join_game(gid):
         'marked_cells': [[2, 2]],
         'marked2':      [[2, 2]],
     })
+
+@app.route('/api/games/<gid>/leave', methods=['POST'])
+def leave_game(gid):
+    user, _, err = require_auth()
+    if err: return err
+    with _db_lock:
+        gm = query_db('SELECT * FROM bingo_games WHERE id=?', (gid,), one=True)
+        if not gm:
+            return jsonify({'ok': True})
+        prow = query_db(
+            'SELECT * FROM bingo_players WHERE game_id=? AND user_id=?', (gid, user['id']), one=True
+        )
+        if not prow or prow.get('kicked'):
+            return jsonify({'ok': True})
+        cost   = gm['bet_amount'] * prow.get('bet_paid', 1)
+        status = gm['status']
+        execute_db('UPDATE bingo_players SET kicked=1 WHERE id=?', (prow['id'],))
+        execute_db('UPDATE users SET games_played=games_played+1 WHERE id=?', (user['id'],))
+        execute_db(
+            'INSERT INTO game_history (user_id,game_id,bet_amount,prize_won,won) VALUES (?,?,?,0,0)',
+            (user['id'], gid, cost)
+        )
+        if status in ('waiting', 'countdown'):
+            execute_db('UPDATE users SET balance=balance+? WHERE id=?', (cost, user['id']))
+            return jsonify({'ok': True, 'refunded': True})
+        remaining = query_db(
+            'SELECT * FROM bingo_players WHERE game_id=? AND kicked=0', (gid,)
+        )
+        if len(remaining) == 1:
+            sole   = remaining[0]
+            prize2 = int(_calc_pot(gid) * gm['bet_amount'] * (1 - HOUSE_CUT))
+            now2   = time.time()
+            execute_many([
+                ("UPDATE bingo_games SET status='finished', winner_id=?, finished_at=? WHERE id=?",
+                 (sole['user_id'], now2, gid)),
+                ('UPDATE bingo_players SET has_bingo=1 WHERE id=?', (sole['id'],)),
+                ('UPDATE users SET balance=balance+?, wins=wins+1, games_played=games_played+1, total_won=total_won+? WHERE id=?',
+                 (prize2, prize2, sole['user_id'])),
+                ('INSERT INTO game_history (user_id,game_id,bet_amount,prize_won,won) VALUES (?,?,?,?,1)',
+                 (sole['user_id'], gid, gm['bet_amount'], prize2)),
+            ])
+            _notify_queue.put({'tg_id': sole['user_id'], 'event': '_last_standing', 'data': {'prize': prize2}})
+            return jsonify({'ok': True, 'last_standing': True})
+    return jsonify({'ok': True})
 
 @app.route('/api/games/<gid>/mark', methods=['POST'])
 def mark_cell(gid):
@@ -1001,9 +1050,8 @@ def claim_bingo(gid):
                 'SELECT * FROM bingo_players WHERE game_id=? AND kicked=0', (gid,)
             )
             if len(remaining) == 1:
-                sole  = remaining[0]
-                pot2  = query_db('SELECT COUNT(*) AS c FROM bingo_players WHERE game_id=?',(gid,),one=True)['c']
-                prize2 = int(pot2 * gm['bet_amount'] * (1 - HOUSE_CUT))
+                sole   = remaining[0]
+                prize2 = int(_calc_pot(gid) * gm['bet_amount'] * (1 - HOUSE_CUT))
                 now2  = time.time()
                 execute_many([
                     ("UPDATE bingo_games SET status='finished', winner_id=?, finished_at=? WHERE id=?",
@@ -1017,11 +1065,9 @@ def claim_bingo(gid):
                 _notify_queue.put({'tg_id': sole['user_id'], 'event': '_last_standing',
                                    'data': {'prize': prize2}})
             return jsonify({'kicked': True, 'error': 'Wrong BINGO — you have been removed from the game!'}), 200
-        # Valid BINGO — count only non-kicked players for pot
-        pcount = query_db(
-            'SELECT COUNT(*) AS c FROM bingo_players WHERE game_id=? AND kicked=0', (gid,), one=True
-        )['c']
-        pot   = pcount * gm['bet_amount']
+        # Pot = sum of all actual payments (dual-card pays 2x)
+        total_units = _calc_pot(gid)
+        pot   = total_units * gm['bet_amount']
         prize = int(pot * (1 - HOUSE_CUT))
         now   = time.time()
         execute_many([
@@ -1857,7 +1903,7 @@ async def cmd_invite(message: Message, session: aiohttp.ClientSession):
         f'👥 Friends joined: <b>{rc}</b>\n'
         f'🎁 Next bonus at: <b>{nxt} referrals</b> (+{REFERRAL_BONUS} ETB)\n\n'
         f'<b>Recent friends:</b>\n{recent}\n\n'
-        f'Share your link → friends register → you earn <b>{REFERRAL_BONUS} ETB</b> every {REFERRALS_PER_BONUS} signups!',
+        f'Share your link → friends register → you earn <b>{REFERRAL_BONUS} ETB</b> every {REFERRALS_PER_BONUS} signups!\n\n'        '🇪🇹 <i>በ 10 ብር ቦነስ ጀምሩ! ጓደኛ ሲጋብዙ ሌላ ቦነስ! ይጫወቱ! ያሸንፉ!</i>',
         reply_markup=kb_main(),
     )
 
