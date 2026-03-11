@@ -521,13 +521,14 @@ body::before {
   flex-direction:column;
 }
 .game-top {
-  flex:0 0 auto;
-  background:var(--bg2);
-  border-bottom:1px solid var(--border);
-  display:flex; flex-direction:column;
-  padding:10px 12px 8px;
-  gap:4px;
-  position:relative;
+  flex: 0 0 auto;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  display: flex; flex-direction: column;
+  padding: 10px 12px 8px;
+  gap: 4px;
+  position: relative;
+  contain: layout style; /* prevent reflow from affecting cards area */
 }
 .game-bottom {
   flex:1 1 0; overflow:hidden;
@@ -553,10 +554,13 @@ body::before {
 }
 .countdown-timer {
   font-family:'Orbitron',monospace; font-weight:900;
-  font-size:32px; color:var(--gold);
+  font-size:28px; color:var(--gold);
   line-height:1;
   text-shadow: var(--glow-gold);
   animation: timer-pulse 1s ease-in-out infinite;
+  font-variant-numeric: tabular-nums;
+  min-width: 64px; text-align:right;
+  will-change: opacity;  /* only animate opacity, not layout */
 }
 @keyframes timer-pulse { 0%,100%{opacity:1}50%{opacity:.85} }
 .countdown-label { font-size:11px; color:var(--text3); letter-spacing:2px; text-transform:uppercase; }
@@ -568,10 +572,13 @@ body::before {
 }
 .current-call-label { font-size:10px; color:var(--text3); letter-spacing:2px; margin-bottom:2px; }
 .current-call-num {
-  font-family:'Orbitron',monospace; font-weight:900; font-size:30px;
+  font-family:'Orbitron',monospace; font-weight:900; font-size:24px;
   color:var(--green); line-height:1;
   text-shadow:var(--glow-green);
   animation:call-bounce .35s ease;
+  font-variant-numeric: tabular-nums;
+  min-width: 60px; text-align:center;
+  will-change: transform;
 }
 @keyframes call-bounce { 0%{transform:scale(1.4)}100%{transform:scale(1)} }
 .called-numbers-wrap {
@@ -608,29 +615,32 @@ body::before {
 }
 .game-card-header { display:flex; align-items:center; justify-content:space-between; flex-shrink:0; }
 .game-card-title { font-family:'Orbitron',monospace; font-size:11px; color:var(--gold); font-weight:700; }
-/* Game card fills available height — responsive to screen size */
+/* Game card: fills available space, compact cells */
 .bingo-card-grid.game-card {
   max-width: none; margin: 0;
-  flex: 1; min-height: 0;
+  flex: 1; min-height: 0; max-height: 100%;
   display: grid !important;
   grid-template-columns: repeat(5, 1fr);
   grid-template-rows: auto repeat(5, 1fr);
+  overflow: hidden;
 }
 .bingo-card-grid.game-card .bc-header {
-  font-size: clamp(11px, 3.5vw, 18px);
-  padding: clamp(3px, 1vw, 8px) 2px;
+  font-size: clamp(9px, 3vw, 14px);
+  padding: 2px;
+  white-space: nowrap;
 }
 .bingo-card-grid.game-card .bc-cell {
-  aspect-ratio: unset;
+  aspect-ratio: unset; overflow: hidden;
   min-height: 0; min-width: 0;
-  font-size: clamp(9px, 3vw, 14px);
+  font-size: clamp(8px, 2.5vw, 12px);
+  padding: 1px;
 }
-/* Single card — slightly larger font */
-#cards-area.single .bingo-card-grid.game-card .bc-cell { font-size: clamp(11px, 3.5vw, 15px); }
-#cards-area.single .bingo-card-grid.game-card .bc-header { font-size: clamp(13px, 4vw, 20px); }
+/* Single card */
+#cards-area.single .bingo-card-grid.game-card .bc-cell   { font-size: clamp(10px, 3vw, 13px); }
+#cards-area.single .bingo-card-grid.game-card .bc-header { font-size: clamp(11px, 3.5vw, 16px); }
 /* Dual mode */
-#cards-area:not(.single) .bingo-card-grid.game-card .bc-header { font-size: clamp(9px, 2.8vw, 14px); }
-#cards-area:not(.single) .bingo-card-grid.game-card .bc-cell   { font-size: clamp(7px, 2.3vw, 11px); }
+#cards-area:not(.single) .bingo-card-grid.game-card .bc-header { font-size: clamp(8px, 2.5vw, 12px); }
+#cards-area:not(.single) .bingo-card-grid.game-card .bc-cell   { font-size: clamp(6px, 2vw, 10px); }
 /* Dual card border separation */
 #card2-area {
   border-left: 2px solid var(--gold);
@@ -830,11 +840,14 @@ body::before {
       </div>
       <div class="card slide-up">
         <div class="card-title">👤 New Player</div>
-        <div class="bonus-badge">🎁 100 ETB Welcome Bonus on signup!</div>
+        <div class="bonus-badge">🎁 Welcome Bonus + 10% on First Deposit!</div>
         <label class="label" style="margin-top:10px">Choose Your Username</label>
         <input class="input" id="input-username" type="text" placeholder="e.g. BingoKing99" maxlength="20" autocomplete="off">
+        <label class="label" style="margin-top:10px">Phone Number <span style="color:var(--red)">*</span></label>
+        <input class="input" id="input-phone" type="tel" placeholder="09XXXXXXXX" autocomplete="tel">
+        <div style="font-size:11px;color:var(--text3);margin-bottom:10px">Required for deposits & withdrawals</div>
         <button class="btn btn-gold" onclick="submitRegister()">CREATE ACCOUNT & PLAY</button>
-        <div style="font-size:11px;color:var(--text3);text-align:center;margin-top:10px">2–20 characters · No spaces · Your unique identity</div>
+        <div style="font-size:11px;color:var(--text3);text-align:center;margin-top:10px">Username: 2–20 chars · No spaces</div>
       </div>
     </div>
 
@@ -874,6 +887,19 @@ body::before {
 
     <!-- ── NUMBER PICKER ── -->
     <div class="screen" id="screen-picker">
+      <!-- Live game info bar -->
+      <div id="picker-game-bar" style="display:none;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:8px 12px;margin-bottom:8px;display:none">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+          <div style="font-size:11px;color:var(--text3)">LOBBY</div>
+          <div style="font-size:11px;color:var(--text3)"><span id="picker-player-count">0</span> players waiting</div>
+          <div style="font-size:11px;font-weight:700;color:var(--gold)">Pot: <span id="picker-pot">0</span> ETB · Prize: <span id="picker-prize">0</span> ETB</div>
+          <div id="picker-countdown-wrap" style="font-size:11px;font-weight:700;color:var(--green)">⏱ <span id="picker-countdown">0:30</span></div>
+        </div>
+        <!-- Game-started warning -->
+        <div id="picker-started-warn" style="display:none;margin-top:6px;padding:6px 8px;background:rgba(245,78,78,.15);border:1px solid var(--red);border-radius:6px;font-size:11px;color:var(--red);font-weight:700">
+          ⚠️ This game has started! Wait for next game — <span id="picker-wait-timer">60</span>s
+        </div>
+      </div>
       <div class="card card-gold fade-in">
         <div class="card-title">🔢 Pick Your Lucky Number</div>
         <div style="font-size:12px;color:var(--text2);margin-bottom:14px">
@@ -914,7 +940,7 @@ body::before {
         <span id="chosen-num2-display" style="font-family:'Orbitron',monospace;font-weight:900;color:var(--green)">—</span>
         <span id="card2-pick-hint" style="color:var(--text3);margin-left:6px">← tap a number above</span>
       </div>
-      <button class="btn btn-ghost" style="margin-top:4px" onclick="showScreen('screen-lobby')">← Back to Lobby</button>
+      <button class="btn btn-ghost" style="margin-top:4px" onclick="stopPickerPoll();showScreen('screen-lobby');startLobbyPolling()">← Back to Lobby</button>
     </div>
 
     <!-- ── CARD PREVIEW ── -->
@@ -1001,7 +1027,7 @@ body::before {
             <div class="bingo-card-grid game-card" id="game-card2-grid"></div>
           </div>
         </div>
-        <button class="btn btn-ghost btn-sm" style="flex-shrink:0;font-size:11px;margin-top:4px" onclick="confirmLeave()">Leave Game</button>
+        <button class="btn btn-ghost btn-sm" id="leave-btn" style="flex-shrink:0;font-size:11px;margin-top:4px" onclick="confirmLeave()">Leave Game</button>
       </div>
     </div>
 
@@ -1346,18 +1372,20 @@ async function handleWelcomeClick() {
 
 async function submitRegister() {
   const username = document.getElementById('input-username').value.trim();
+  const phone    = document.getElementById('input-phone')?.value.trim() || '';
   if (!username || username.length < 2) { toast('Username must be 2+ characters', 'error'); return; }
   if (username.length > 20) { toast('Username too long (max 20)', 'error'); return; }
   if (/\s/.test(username)) { toast('No spaces in username', 'error'); return; }
-
+  if (!phone) { toast('Phone number is required', 'error'); return; }
   try {
     const res = await api('POST', '/api/register', {
       tg_id: String(S.tgUser.id),
-      username
+      username,
+      phone,
     });
     S.user = res.user;
     onLoggedIn();
-    toast('Welcome! You got 100 ETB bonus 🎁', 'success');
+    toast('Welcome! Your account is ready 🎁', 'success');
   } catch (e) {
     toast(e.message, 'error');
   }
@@ -1520,7 +1548,7 @@ function copyReferralLink() {
 }
 function shareReferralTelegram() {
   const t=document.getElementById('friends-link')?.textContent||'';
-  const msg='Join Benz Bingo 🎱 and win ETB!\n\nበ 10 ብር ቦነስ ጀምሩ! ጓደኛ ሲጋብዙ ሌላ ቦነስ! ይጫወቱ! ያሸንፉ!';
+  const msg='Join Benz Bingo 🎱 and win ETB!\n🎁 Get 10% bonus on your first deposit!\n\nበ 10 ብር ቦነስ ጀምሩ! 1ኛ ዲፖዚት 10% ቦነስ! ጓደኛ ሲጋብዙ ሌላ ቦነስ! ይጫወቱ! ያሸንፉ!';
   const url=`https://t.me/share/url?url=${encodeURIComponent(t)}&text=${encodeURIComponent(msg)}`;
   if(window.Telegram?.WebApp?.openTelegramLink)window.Telegram.WebApp.openTelegramLink(url);
   else window.open(url,'_blank');
@@ -1651,15 +1679,90 @@ async function joinExistingGame(gameId) {
   await enterPickerForGame(gameId);
 }
 
+let _pickerPollInterval = null;
+let _pickerWaitTimer = null;
+
+function stopPickerPoll() {
+  if (_pickerPollInterval) { clearInterval(_pickerPollInterval); _pickerPollInterval = null; }
+  if (_pickerWaitTimer)    { clearInterval(_pickerWaitTimer);    _pickerWaitTimer    = null; }
+}
+
+function _updatePickerBar(gm) {
+  const bar = document.getElementById('picker-game-bar');
+  if (!bar) return;
+  bar.style.display = 'block';
+  // Player count & pot
+  document.getElementById('picker-player-count').textContent = gm.player_count || 0;
+  const potEtb = gm.pot || 0;
+  document.getElementById('picker-pot').textContent = potEtb.toLocaleString();
+  document.getElementById('picker-prize').textContent = (gm.prize || 0).toLocaleString();
+  // Countdown
+  const cdWrap = document.getElementById('picker-countdown-wrap');
+  if (gm.status === 'countdown' && gm.countdown_remaining > 0) {
+    if (cdWrap) cdWrap.style.display = 'block';
+    document.getElementById('picker-countdown').textContent = formatTime(gm.countdown_remaining);
+  } else {
+    if (cdWrap) cdWrap.style.display = 'none';
+  }
+  // Game started lockout
+  const previewBtn = document.getElementById('preview-btn');
+  const startedWarn = document.getElementById('picker-started-warn');
+  if (gm.status === 'active') {
+    if (previewBtn) { previewBtn.disabled = true; previewBtn.style.opacity = '0.4'; }
+    if (startedWarn) startedWarn.style.display = 'block';
+    // Start 60s wait timer if not already running
+    if (!_pickerWaitTimer) {
+      let _waitSec = 60;
+      const timerEl = document.getElementById('picker-wait-timer');
+      if (timerEl) timerEl.textContent = _waitSec;
+      _pickerWaitTimer = setInterval(() => {
+        _waitSec--;
+        if (timerEl) timerEl.textContent = _waitSec;
+        if (_waitSec <= 0) {
+          clearInterval(_pickerWaitTimer); _pickerWaitTimer = null;
+          // Time up — go back to lobby for a new game
+          stopPickerPoll();
+          S.currentGameId = null;
+          showScreen('screen-lobby'); startLobbyPolling();
+          toast('Game ended — please select another lobby', 'error');
+        }
+      }, 1000);
+    }
+  } else if (gm.status === 'finished') {
+    // Previous game ended — re-enable proceed and clear lockout
+    if (previewBtn) { previewBtn.disabled = false; previewBtn.style.opacity = '1'; }
+    if (startedWarn) startedWarn.style.display = 'none';
+    if (_pickerWaitTimer) { clearInterval(_pickerWaitTimer); _pickerWaitTimer = null; }
+    // Find a new (or same) waiting game
+    api('POST', '/api/games', { bet_amount: S.selectedBet }).then(newGm => {
+      S.currentGameId = newGm.id;
+      toast('Next game ready — proceed when ready!', 'success');
+    }).catch(() => {});
+  } else {
+    if (previewBtn) { previewBtn.disabled = false; previewBtn.style.opacity = '1'; }
+    if (startedWarn) startedWarn.style.display = 'none';
+    if (_pickerWaitTimer) { clearInterval(_pickerWaitTimer); _pickerWaitTimer = null; }
+  }
+}
+
+async function _pollPickerGame() {
+  if (!S.currentGameId) return;
+  try {
+    const gm = await api('GET', '/api/games/' + S.currentGameId);
+    _updatePickerBar(gm);
+  } catch(_) {}
+}
+
 async function enterPickerForGame(gameId) {
   S.currentGameId = gameId;
   stopLobbyPolling();
+  stopPickerPoll();
 
   // Build number grid (show taken numbers)
   let takenNumbers = [];
   try {
     const gm = await api('GET', '/api/games/' + gameId);
-    takenNumbers = gm.players.map(p=>p.picked_number).filter(Boolean);
+    takenNumbers = gm.players.flatMap(p=>[p.picked_number, p.picked_number2]).filter(Boolean);
     // Check if already joined
     if (gm.my_player) {
       S.myCard    = gm.my_player.card;
@@ -1676,6 +1779,9 @@ async function enterPickerForGame(gameId) {
   _lastTakenNumbers = takenNumbers;
   buildNumGrid(takenNumbers);
   showScreen('screen-picker');
+  // Start live game-info polling for picker screen
+  _pollPickerGame();
+  _pickerPollInterval = setInterval(_pollPickerGame, 2000);
   S.pickedNumber  = null;
   S.pickedNumber2 = null;
   S.previewCard   = null;
@@ -1698,6 +1804,7 @@ async function enterPickerForGame(gameId) {
    NUMBER PICKER
 ══════════════════════════════════════════════════════════ */
 let _lastTakenNumbers = [];
+let _lastPrize = 0;
 
 function buildNumGrid(taken = []) {
   _lastTakenNumbers = taken;
@@ -1749,6 +1856,7 @@ function pickNumber(n, el) {
 
 async function goToPreview() {
   if (!S.pickedNumber) { toast('Pick a lucky number first!', 'error'); return; }
+  stopPickerPoll();
   if (S.dualCard && !S.pickedNumber2) { toast('Pick a lucky number for Card 2!', 'error'); return; }
   try {
     const r1 = await api('GET', '/api/preview-card/' + S.pickedNumber);
@@ -1910,24 +2018,28 @@ async function pollGame() {
       return;
     }
 
+    const leaveBtn = document.getElementById('leave-btn');
     if (gm.status === 'waiting' || gm.status === 'countdown') {
+      if (leaveBtn) leaveBtn.textContent = 'Leave Game';
       showPhase('phase-waiting');
       const remaining = gm.countdown_remaining ?? 30;
       document.getElementById('countdown-display').textContent = formatTime(remaining);
       document.getElementById('game-player-count').textContent = gm.player_count + ' player' + (gm.player_count!==1?'s':'');
       document.getElementById('game-room-label').textContent = gm.id;
       if (gm.status === 'waiting') {
-        _countdownStarted = false;
+        _countdownStarted = false; _gameIsActive = false;
         document.getElementById('waiting-status-msg').textContent = '⏳ Waiting for another player to join…';
         document.getElementById('game-status-chip').innerHTML = '<div class="chip chip-gold">WAITING</div>';
       } else {
-        _countdownStarted = true;
+        _countdownStarted = true; _gameIsActive = false;
         document.getElementById('waiting-status-msg').textContent = '✅ Countdown started! Get ready…';
         document.getElementById('game-status-chip').innerHTML = '<div class="chip chip-green"><span class="dot"></span>COUNTDOWN</div>';
       }
     }
 
     if (gm.status === 'active') {
+      if (leaveBtn) leaveBtn.textContent = 'Forfeit Game';
+      _gameIsActive = true;
       showPhase('phase-active');
       const called = gm.called_numbers || [];
       document.getElementById('called-count').textContent = called.length;
@@ -2001,6 +2113,7 @@ function checkLocalBingo() {
   for (let c=0;c<5;c++) if([0,1,2,3,4].every(r=>ok(r,c))) return true;
   if([0,1,2,3,4].every(i=>ok(i,i))) return true;
   if([0,1,2,3,4].every(i=>ok(i,4-i))) return true;
+  if([[0,0],[0,4],[4,0],[4,4]].every(([r,c])=>ok(r,c))) return true; // 4 corners
   return false;
 }
 
@@ -2024,6 +2137,7 @@ async function doClaim(cardId=1) {
     }
     if (res.winner) {
       clearInterval(S.gamePolling);
+      _lastPrize = res.prize;
       S.user = res.user; renderHeader(); renderNav();
       showBingoOverlay(res.prize);
     }
@@ -2040,7 +2154,7 @@ function showBingoOverlay(prize) {
 
 function hideBingoOverlay() {
   document.getElementById('bingo-overlay').classList.remove('show');
-  showResult(true, S.user?.balance || 0);
+  showResult(true, _lastPrize || 0);
 }
 
 function handleGameFinished(gm) {
@@ -2050,7 +2164,7 @@ function handleGameFinished(gm) {
     const iWon   = winner && winner.username === S.user?.username;
     if (iWon) {
       // Already shown via doClaim / bingo overlay — but handle here for poll-based detection
-      refreshUser().then(() => showResult(true, S.user?.balance || 0));
+      refreshUser().then(() => showResult(true, _lastPrize || 0));
     } else if (gm.my_player && !gm.my_player.kicked && !winner) {
       // We're still in game, no winner via bingo — last standing
       refreshUser().then(() => showResult(false, 0, '__last_standing__'));
@@ -2099,21 +2213,16 @@ function showResult(won, balance, winnerName, kicked=false) {
 }
 
 let _countdownStarted = false;
+let _gameIsActive = false;
 /* Play Again — reuse same card/lucky number in a fresh game */
 async function playAgain() {
-  if (!S.lastBet || !S.lastPickedNum || !S.lastCard) {
+  if (!S.lastBet || !S.lastPickedNum) {
     showScreen('screen-lobby'); refreshLobby(); return;
   }
   try {
-    // Create new game
+    // Get or create the ONE game room for this bet amount
     const gm = await api('POST', '/api/games', { bet_amount: S.lastBet });
-    // Join with same picked number + card (backend generates card from seed,
-    // so we need to join and replace the card with our saved one server-side — 
-    // workaround: join normally then replace card in state)
-    const body = {
-      picked_number: S.lastPickedNum,
-      dual_card:     S.lastDual,
-    };
+    const body = { picked_number: S.lastPickedNum, dual_card: S.lastDual };
     if (S.lastDual && S.lastPickedNum2) body.picked_number2 = S.lastPickedNum2;
     const joined = await api('POST', `/api/games/${gm.id}/join`, body);
     S.currentGameId  = gm.id;
@@ -2121,7 +2230,6 @@ async function playAgain() {
     S.pickedNumber   = S.lastPickedNum;
     S.pickedNumber2  = S.lastPickedNum2;
     S.dualCard       = S.lastDual;
-    // Use the server-issued card (seeded from same lucky number → same card)
     S.myCard         = joined.card;
     S.myCard2        = joined.card2 || null;
     S.myMarked       = [[2,2]];
@@ -2129,8 +2237,15 @@ async function playAgain() {
     showScreen('screen-game');
     startGameScreen();
   } catch(e) {
-    toast(e.message || 'Could not start game', 'error');
-    showScreen('screen-lobby'); refreshLobby();
+    // Number taken — go to picker for same game
+    try {
+      const gm2 = await api('POST', '/api/games', { bet_amount: S.lastBet });
+      S.selectedBet = S.lastBet;
+      await enterPickerForGame(gm2.id);
+      toast('Your lucky number is taken — pick a new one', 'error');
+    } catch(_) {
+      showScreen('screen-lobby'); refreshLobby();
+    }
   }
 }
 
@@ -2146,7 +2261,8 @@ function resultChangeLucky() {
 
 function confirmLeave() {
   const warn = document.getElementById('leave-forfeit-warn');
-  if (warn) warn.style.display = _countdownStarted ? 'block' : 'none';
+  // Forfeit only applies when game is actively running, not during waiting/countdown
+  if (warn) warn.style.display = (_gameIsActive ? 'block' : 'none');
   document.getElementById('leave-modal').style.display = 'flex';
 }
 async function doLeave(confirmed) {
