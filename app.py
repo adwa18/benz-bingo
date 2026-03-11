@@ -81,9 +81,9 @@ HOUSE_CUT           = 0.10
 COUNTDOWN_SECS      = 30
 CALL_INTERVAL       = 3
 BET_AMOUNTS         = [10, 20, 50, 100]
-REFERRAL_BONUS      = 5          # ETB per batch
+REFERRAL_BONUS      = 20         # ETB per batch
 REFERRALS_PER_BONUS = 10         # new users per batch
-MIN_DEPOSIT      = 10
+MIN_DEPOSIT      = 50
 MAX_DEPOSIT      = 5_000
 MIN_WITHDRAW     = 100
 PAYMENT_ACCOUNTS = (
@@ -325,6 +325,8 @@ def init_db():
                 is_admin        INTEGER NOT NULL DEFAULT 0,
                 referral_count  INTEGER NOT NULL DEFAULT 0,
                 referred_by     INTEGER,
+                deposit_count   INTEGER NOT NULL DEFAULT 0,
+                phone           TEXT,
                 created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
             CREATE TABLE IF NOT EXISTS bingo_games (
@@ -379,6 +381,8 @@ def init_db():
             migrations = [
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_count INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by INTEGER",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS deposit_count INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT",
                 "ALTER TABLE bingo_players ADD COLUMN IF NOT EXISTS card2 TEXT",
                 "ALTER TABLE bingo_players ADD COLUMN IF NOT EXISTS marked2 TEXT NOT NULL DEFAULT '[[2,2]]'",
                 "ALTER TABLE bingo_players ADD COLUMN IF NOT EXISTS bet_paid INTEGER NOT NULL DEFAULT 1",
@@ -414,6 +418,8 @@ def init_db():
                     is_admin       INTEGER DEFAULT 0,
                     referral_count INTEGER DEFAULT 0,
                     referred_by    INTEGER,
+                    deposit_count  INTEGER DEFAULT 0,
+                    phone          TEXT,
                     created_at     TEXT DEFAULT (datetime('now'))
                 );
                 CREATE TABLE IF NOT EXISTS bingo_games (
@@ -572,6 +578,7 @@ def check_bingo(card: list, marked: list, called: list) -> bool:
         if all((r, c) in s for r in range(5)): return True
     if all((i, i) in s for i in range(5)):     return True
     if all((i, 4-i) in s for i in range(5)):   return True
+    if all((r,c) in s for r,c in [(0,0),(0,4),(4,0),(4,4)]): return True  # 4 corners
     return False
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -703,6 +710,7 @@ def register():
     body        = request.json or {}
     tg_id       = str(body.get('tg_id', '')).strip()
     username    = body.get('username', '').strip()
+    phone       = str(body.get('phone', '')).strip()
     referred_by = body.get('referred_by')   # tg_id of referrer
     if not tg_id or not username:
         return jsonify({'error': 'tg_id and username are required'}), 400
@@ -718,8 +726,8 @@ def register():
         ref_user = query_db('SELECT * FROM users WHERE tg_id=?', (str(referred_by),), one=True)
     ref_id = ref_user['id'] if ref_user else None
     execute_db(
-        'INSERT INTO users (tg_id, username, balance, is_admin, referred_by) VALUES (?,?,?,?,?)',
-        (tg_id, username, WELCOME_BONUS, is_admin, ref_id)
+        'INSERT INTO users (tg_id, username, balance, is_admin, referred_by, phone) VALUES (?,?,?,?,?,?)',
+        (tg_id, username, WELCOME_BONUS, is_admin, ref_id, phone or None)
     )
     user = query_db('SELECT * FROM users WHERE tg_id=?', (tg_id,), one=True)
     # Credit referrer: +5 ETB per 10 successful referrals
@@ -804,6 +812,12 @@ def create_game():
     bet  = body.get('bet_amount')
     if bet not in BET_AMOUNTS:
         return jsonify({'error': f'bet_amount must be one of {BET_AMOUNTS}'}), 400
+    existing = query_db(
+        "SELECT * FROM bingo_games WHERE bet_amount=? AND status='waiting' ORDER BY created_at ASC LIMIT 1",
+        (bet,), one=True
+    )
+    if existing:
+        return jsonify(existing), 200
     if user['balance'] < bet:
         return jsonify({'error': 'Insufficient balance'}), 400
     gid = 'G' + uuid.uuid4().hex[:8].upper()
@@ -939,6 +953,10 @@ def leave_game(gid):
         )
         if status in ('waiting', 'countdown'):
             execute_db('UPDATE users SET balance=balance+? WHERE id=?', (cost, user['id']))
+            remaining_all = query_db('SELECT id FROM bingo_players WHERE game_id=? AND kicked=0', (gid,))
+            if not remaining_all:
+                execute_db("UPDATE bingo_games SET status='finished', finished_at=? WHERE id=?",
+                           (time.time(), gid))
             return jsonify({'ok': True, 'refunded': True})
         remaining = query_db(
             'SELECT * FROM bingo_players WHERE game_id=? AND kicked=0', (gid,)
@@ -1126,6 +1144,27 @@ def admin_user_by_tgid(tgid):
     row = query_db('SELECT username,tg_id,balance FROM users WHERE tg_id=?', (str(tgid),), one=True)
     if not row: return jsonify({'error': 'Not found'}), 404
     return jsonify(row)
+
+# ── First-deposit bonus endpoint ─────────────────────────────────────────────
+@app.route('/api/deposit-complete', methods=['POST'])
+def deposit_complete():
+    admin, err = require_admin()
+    if err: return err
+    body   = request.json or {}
+    tg_id  = str(body.get('tg_id', ''))
+    amount = int(body.get('amount', 0))
+    target = query_db('SELECT * FROM users WHERE tg_id=?', (tg_id,), one=True)
+    if not target:
+        return jsonify({'error': 'User not found'}), 404
+    bonus = 0
+    if target.get('deposit_count', 0) == 0 and amount >= MIN_DEPOSIT:
+        bonus = int(amount * 0.10)
+        execute_db('UPDATE users SET balance=balance+?, deposit_count=deposit_count+1 WHERE tg_id=?',
+                   (bonus, tg_id))
+    else:
+        execute_db('UPDATE users SET deposit_count=deposit_count+1 WHERE tg_id=?', (tg_id,))
+    fresh = query_db('SELECT * FROM users WHERE tg_id=?', (tg_id,), one=True)
+    return jsonify({'bonus': bonus, 'new_balance': fresh['balance']})
 
 # ── Admin routes ──────────────────────────────────────────────────────────────
 @app.route('/api/admin/stats', methods=['GET'])
@@ -1514,10 +1553,13 @@ async def reg_username(message: Message, state: FSMContext, session: aiohttp.Cli
     await message.answer(
         f"✅ <b>Account created!</b>\n\n"
         f"Username: <b>{user['username']}</b>\n"
-        f"Welcome bonus: <b>10 ETB</b> 🎁\n\n"
-        "📱 Share your phone to enable deposits/withdrawals.\n"
-        "(Tap <b>⏭ Skip</b> to do this later.)",
-        reply_markup=kb_phone(),
+        f"Welcome bonus: <b>{WELCOME_BONUS} ETB</b> 🎁\n\n"
+        "📱 <b>Share your phone number</b> to complete registration.\n"
+        "Required for deposits & withdrawals.",
+        reply_markup=ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text='📱 Share Phone', request_contact=True)]],
+            resize_keyboard=True, one_time_keyboard=True,
+        )
     )
 
 @bot_router.message(Registration.waiting_for_phone, F.contact)
@@ -1533,10 +1575,9 @@ async def reg_phone(message: Message, state: FSMContext):
         reply_markup=kb_main(),
     )
 
-@bot_router.message(Registration.waiting_for_phone, F.text.in_({'⏭ Skip', '❌ Cancel'}))
-async def reg_skip(message: Message, state: FSMContext):
-    await state.clear()
-    await message.answer("👍 You can add your phone later.\nLet's play!", reply_markup=kb_main())
+@bot_router.message(Registration.waiting_for_phone, F.text)
+async def reg_phone_text(message: Message, state: FSMContext):
+    await message.answer('⚠️ Please tap the <b>📱 Share Phone</b> button to continue.')
 
 # /cancel  ────────────────────────────────────────────────────────────────────
 @bot_router.message(Command('cancel'))
@@ -1706,10 +1747,12 @@ async def cmd_deposit(message: Message, state: FSMContext, session: aiohttp.Clie
         await message.answer(f'⚠️ {exc}'); return
     await state.update_data(bb_username=u.get('username', '—'))
     await state.set_state(Deposit.waiting_for_amount)
+    first_dep = u.get('deposit_count', 0) == 0
     await message.answer(
         f"💰 <b>Deposit Funds</b>\n\n"
-        f"Balance: <b>{u['balance']:,} ETB</b>\n\n"
-        f"Enter amount (min {MIN_DEPOSIT} · max {MAX_DEPOSIT:,} ETB):",
+        f"Balance: <b>{u['balance']:,} ETB</b>\n"
+        + ("🎁 <b>First deposit? You get 10% bonus!</b>\n" if first_dep else "")
+        + f"\nEnter amount (min {MIN_DEPOSIT} · max {MAX_DEPOSIT:,} ETB):",
         reply_markup=kb_cancel(),
     )
 
@@ -1903,7 +1946,7 @@ async def cmd_invite(message: Message, session: aiohttp.ClientSession):
         f'👥 Friends joined: <b>{rc}</b>\n'
         f'🎁 Next bonus at: <b>{nxt} referrals</b> (+{REFERRAL_BONUS} ETB)\n\n'
         f'<b>Recent friends:</b>\n{recent}\n\n'
-        f'Share your link → friends register → you earn <b>{REFERRAL_BONUS} ETB</b> every {REFERRALS_PER_BONUS} signups!\n\n'        '🇪🇹 <i>በ 10 ብር ቦነስ ጀምሩ! ጓደኛ ሲጋብዙ ሌላ ቦነስ! ይጫወቱ! ያሸንፉ!</i>',
+        f'Share your link → friends register → you earn <b>{REFERRAL_BONUS} ETB</b> every {REFERRALS_PER_BONUS} signups!\n\n'        '🎁 <b>New players get 10% bonus on first deposit!</b>\n\n'        '🇪🇹 <i>በ 10 ብር ቦነስ ጀምሩ! 1ኛ ዲፖዚት 10% ቦነስ! ጓደኛ ሲጋብዙ ሌላ ቦነስ! ይጫወቱ! ያሸንፉ!</i>',
         reply_markup=kb_main(),
     )
 
@@ -1955,8 +1998,14 @@ async def cmd_adep(message: Message, session: aiohttp.ClientSession):
         if not target: await message.answer('⚠️ User not found.'); return
         res = await bot_api('POST', '/api/admin/funds', tg_id=message.from_user.id,
                             body={'username': target['username'], 'amount': int(amt)}, session=session)
-        await message.answer(f"✅ +{amt:,.0f} ETB → <b>{target['username']}</b>\nBalance: {res['new_balance']:,} ETB")
-        _notify_queue.put({'tg_id': tid, 'event': 'deposit_approved', 'data': {'amount': amt, 'new_balance': res['new_balance']}})
+        bonus_res = await bot_api('POST', '/api/deposit-complete', tg_id=message.from_user.id,
+                                  body={'tg_id': str(tid), 'amount': int(amt)}, session=session)
+        bonus     = bonus_res.get('bonus', 0)
+        final_bal = bonus_res.get('new_balance', res['new_balance'])
+        bonus_note = f"\n🎁 First deposit bonus: +{bonus} ETB!" if bonus else ""
+        await message.answer(f"✅ +{amt:,.0f} ETB → <b>{target['username']}</b>{bonus_note}\nBalance: {final_bal:,} ETB")
+        notify_amt = amt + bonus
+        _notify_queue.put({'tg_id': tid, 'event': 'deposit_approved', 'data': {'amount': notify_amt, 'new_balance': final_bal}})
     except Exception as exc:
         await message.answer(f'⚠️ {exc}')
 
