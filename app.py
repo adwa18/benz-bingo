@@ -609,7 +609,7 @@ class GameEngine:
                 gid    = g['id']
                 status = g['status']
                 pc_row = db.one(
-                    'SELECT COUNT(*) AS c FROM bingo_players WHERE game_id=?', (gid,)
+                    'SELECT COUNT(*) AS c FROM bingo_players WHERE game_id=? AND kicked=0', (gid,)
                 )
                 pcount = pc_row['c'] if pc_row else 0
 
@@ -812,8 +812,10 @@ def create_game():
     bet  = body.get('bet_amount')
     if bet not in BET_AMOUNTS:
         return jsonify({'error': f'bet_amount must be one of {BET_AMOUNTS}'}), 400
+    # Return open room: countdown first (players already gathered), then waiting
     existing = query_db(
-        "SELECT * FROM bingo_games WHERE bet_amount=? AND status='waiting' ORDER BY created_at ASC LIMIT 1",
+        "SELECT * FROM bingo_games WHERE bet_amount=? AND status IN ('waiting','countdown') "
+        "ORDER BY CASE status WHEN 'countdown' THEN 0 ELSE 1 END, created_at ASC LIMIT 1",
         (bet,), one=True
     )
     if existing:
