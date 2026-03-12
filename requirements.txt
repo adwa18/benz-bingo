@@ -4,13 +4,13 @@
 # ── Web framework ─────────────────────────────────────────────────────────────
 flask>=3.0.0
 flask-cors>=4.0.0
-gunicorn>=21.0.0          # Production WSGI server (Render/Railway/etc)
+flask-compress>=1.14      # Gzip JSON/HTML responses automatically
+gunicorn>=21.0.0          # Production WSGI server
 
 # ── Database ──────────────────────────────────────────────────────────────────
-psycopg2-binary>=2.9.9    # PostgreSQL driver (used in production on Render)
-                           # psycopg2-binary includes compiled C libs — no build deps needed
+psycopg2-binary>=2.9.9    # PostgreSQL driver (compiled C — no build deps)
 
-# ── Bot ──────────────────────────────────────────────────────────────────────
+# ── Bot ───────────────────────────────────────────────────────────────────────
 aiogram>=3.7.0             # Async Telegram Bot framework
 aiohttp>=3.9.0             # Async HTTP client/server
 
