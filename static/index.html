@@ -1556,7 +1556,7 @@ function shareReferralTelegram() {
 
 function goToLobby() {
   // Stop any in-progress game polling before going to lobby
-  clearInterval(S.gamePolling);
+  clearTimeout(S.gamePolling);
   S.gamePolling = null;
   S.currentGameId = null;
   refreshLobby();
@@ -1570,29 +1570,23 @@ function closeNav() { document.getElementById('nav-drawer').classList.remove('op
 ══════════════════════════════════════════════════════════ */
 function startLobbyPolling() {
   refreshLobby();
-  S.lobbyPolling = setInterval(refreshLobby, 4000);
+  S.lobbyPolling = setInterval(refreshLobby, 5000);
 }
 
 async function refreshLobby() {
-  // Update wallet
   try {
-    const fresh = await api('GET', '/api/user');
-    S.user = fresh;
-    renderHeader();
-    renderNav();
-  } catch (_) {}
-
-  // Update games list
-  if (S.selectedBet) await loadGamesForBet(S.selectedBet);
-
-  // Update player counts per bet
-  try {
-    const games = await api('GET', '/api/games');
+    const lobby = await api('GET', '/api/lobby');
+    S.user = lobby.user;
+    renderHeader(); renderNav();
+    const games = lobby.games || [];
+    // Per-bet waiting counts
     [10,20,50,100].forEach(b => {
       const count = games.filter(g=>g.bet_amount===b).reduce((s,g)=>s+g.player_count,0);
       const el = document.getElementById('bp-'+b);
       if (el) el.textContent = count;
     });
+    // Active lobby list for selected bet
+    if (S.selectedBet) _renderGamesForBet(S.selectedBet, games.filter(g=>g.bet_amount===S.selectedBet));
   } catch (_) {}
 }
 
@@ -1640,24 +1634,30 @@ function selectBet(amount, el) {
   loadGamesForBet(amount);
 }
 
+function _renderGamesForBet(amount, games) {
+  const el = document.getElementById('lobby-games-list');
+  if (!el) return;
+  const open = games.filter(g => ['waiting','countdown','active'].includes(g.status));
+  if (!open.length) {
+    el.innerHTML = `<div class="empty"><div class="empty-icon">🎱</div>No active lobbies. Create one!</div>`;
+    return;
+  }
+  el.innerHTML = open.map(g => `
+    <div class="game-item">
+      <div class="game-info">
+        <div class="game-id">${g.id}</div>
+        <div class="game-meta">${g.player_count} player${g.player_count!==1?'s':''} · ${statusLabel(g.status)}</div>
+        <div class="game-pot">Pot: ${g.pot.toLocaleString()} ETB → Prize: ${g.prize.toLocaleString()} ETB</div>
+      </div>
+      <button class="btn btn-gold btn-sm" onclick="joinExistingGame('${g.id}')">JOIN</button>
+    </div>
+  `).join('');
+}
+
 async function loadGamesForBet(amount) {
   try {
     const games = await api('GET', '/api/games?bet=' + amount);
-    const el = document.getElementById('lobby-games-list');
-    if (!games.length) {
-      el.innerHTML = `<div class="empty"><div class="empty-icon">🎱</div>No active lobbies. Create one!</div>`;
-      return;
-    }
-    el.innerHTML = games.map(g => `
-      <div class="game-item">
-        <div class="game-info">
-          <div class="game-id">${g.id}</div>
-          <div class="game-meta">${g.player_count} player${g.player_count!==1?'s':''} · ${statusLabel(g.status)}</div>
-          <div class="game-pot">Pot: ${g.pot.toLocaleString()} ETB → Prize: ${g.prize.toLocaleString()} ETB</div>
-        </div>
-        <button class="btn btn-gold btn-sm" onclick="joinExistingGame('${g.id}')">JOIN</button>
-      </div>
-    `).join('');
+    _renderGamesForBet(amount, games);
   } catch (_) {}
 }
 
@@ -1981,7 +1981,15 @@ function startGameScreen() {
   renderGameCard();
   if (S.myCard2) renderGameCard2();
   pollGame();
-  S.gamePolling = setInterval(pollGame, 2000);
+  // Poll faster when active (numbers called every 3s), slower during waiting
+  function _scheduleGamePoll() {
+    const interval = _gameIsActive ? 2000 : 3000;
+    S.gamePolling = setTimeout(async () => {
+      await pollGame();
+      if (S.currentGameId) _scheduleGamePoll();
+    }, interval);
+  }
+  _scheduleGamePoll();
 }
 
 async function pollGame() {
@@ -2003,11 +2011,11 @@ async function pollGame() {
       // Server is source of truth for marks
       S.myMarked  = gm.my_player.marked_cells || [[2,2]];
       S.myMarked2 = gm.my_player.marked2      || [[2,2]];
-      if (gm.my_player.kicked) { clearInterval(S.gamePolling); showResult(false,0,null,true); return; }
+      if (gm.my_player.kicked) { clearTimeout(S.gamePolling); showResult(false,0,null,true); return; }
     }
 
     if (gm.status === 'finished') {
-      clearInterval(S.gamePolling);
+      clearTimeout(S.gamePolling);
       // Check if WE are the winner (last standing scenario)
       if (gm.winner_id && gm.my_player && !gm.my_player.kicked) {
         const myPlayer = gm.players?.find(p => p.username === S.user?.username);
@@ -2131,13 +2139,13 @@ async function doClaim(cardId=1) {
   try {
     const res = await api('POST', `/api/games/${S.currentGameId}/claim`, { card_id: cardId });
     if (res.kicked) {
-      clearInterval(S.gamePolling);
+      clearTimeout(S.gamePolling);
       toast('❌ Wrong BINGO! Removed from game.', 'error');
       setTimeout(() => showResult(false, 0, null, true), 1800);
       return;
     }
     if (res.winner) {
-      clearInterval(S.gamePolling);
+      clearTimeout(S.gamePolling);
       _lastPrize = res.prize;
       S.user = res.user; renderHeader(); renderNav();
       showBingoOverlay(res.prize);
@@ -2159,7 +2167,7 @@ function hideBingoOverlay() {
 }
 
 function handleGameFinished(gm) {
-  clearInterval(S.gamePolling);
+  clearTimeout(S.gamePolling);
   if (gm.winner_id) {
     const winner = gm.players?.find(p => p.has_bingo);
     const iWon   = winner && winner.username === S.user?.username;
@@ -2269,7 +2277,7 @@ function confirmLeave() {
 async function doLeave(confirmed) {
   document.getElementById('leave-modal').style.display = 'none';
   if (!confirmed) return;
-  clearInterval(S.gamePolling);
+  clearTimeout(S.gamePolling);
   const gid = S.currentGameId;
   S.gamePolling=null;
   // Tell server the player is leaving
