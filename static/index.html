@@ -639,8 +639,8 @@ body::before {
 #cards-area.single .bingo-card-grid.game-card .bc-cell   { font-size: clamp(10px, 3vw, 13px); }
 #cards-area.single .bingo-card-grid.game-card .bc-header { font-size: clamp(11px, 3.5vw, 16px); }
 /* Dual mode */
-#cards-area:not(.single) .bingo-card-grid.game-card .bc-header { font-size: clamp(8px, 2.5vw, 12px); }
-#cards-area:not(.single) .bingo-card-grid.game-card .bc-cell   { font-size: clamp(6px, 2vw, 10px); }
+#cards-area:not(.single) .bingo-card-grid.game-card .bc-header { font-size: clamp(10px, 3.2vw, 15px); }
+#cards-area:not(.single) .bingo-card-grid.game-card .bc-cell   { font-size: clamp(9px, 2.8vw, 13px); }
 /* Dual card border separation */
 #card2-area {
   border-left: 2px solid var(--gold);
@@ -1733,10 +1733,11 @@ function _updatePickerBar(gm) {
     if (previewBtn) { previewBtn.disabled = false; previewBtn.style.opacity = '1'; }
     if (startedWarn) startedWarn.style.display = 'none';
     if (_pickerWaitTimer) { clearInterval(_pickerWaitTimer); _pickerWaitTimer = null; }
-    // Find a new (or same) waiting game
-    api('POST', '/api/games', { bet_amount: S.selectedBet }).then(newGm => {
-      S.currentGameId = newGm.id;
-      toast('Next game ready — proceed when ready!', 'success');
+    // Game ended — point player at the single open room for this bet
+    // POST /api/games returns the existing waiting/countdown room, or creates one
+    api('POST', '/api/games', { bet_amount: S.selectedBet }).then(room => {
+      S.currentGameId = room.id;
+      toast('Game over — tap Proceed to join the next game!', 'success');
     }).catch(() => {});
   } else {
     if (previewBtn) { previewBtn.disabled = false; previewBtn.style.opacity = '1'; }
