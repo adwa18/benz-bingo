@@ -70,6 +70,14 @@ logger = logging.getLogger('benz_bingo')
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
 app = Flask(__name__, static_folder='static')
 CORS(app, resources={r"/api/*": {"origins": "*"}})
+app.config['COMPRESS_MIMETYPES'] = ['application/json', 'text/html', 'text/css', 'application/javascript']
+app.config['COMPRESS_LEVEL'] = 6
+app.config['COMPRESS_MIN_SIZE'] = 256
+try:
+    from flask_compress import Compress
+    Compress(app)
+except ImportError:
+    pass  # flask-compress not installed — no gzip
 
 BOT_TOKEN        = os.environ.get('TELEGRAM_BOT_TOKEN', os.environ.get('BOT_TOKEN', ''))
 ADMIN_TG_IDS_STR = os.environ.get('ADMIN_TG_IDS', '')
@@ -137,7 +145,7 @@ def _ensure_pool():
     with _pg_pool_lock:
         if _pg_pool is None:
             _pg_pool = psycopg2.pool.ThreadedConnectionPool(
-                minconn=1, maxconn=10, dsn=_DATABASE_URL
+                minconn=2, maxconn=12, dsn=_DATABASE_URL
             )
 
 # ── Connection helpers ────────────────────────────────────────────────────────
@@ -366,10 +374,22 @@ def init_db():
                 won         INTEGER NOT NULL DEFAULT 0,
                 played_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
-            CREATE INDEX IF NOT EXISTS idx_users_tg_id    ON users(tg_id);
-            CREATE INDEX IF NOT EXISTS idx_games_status   ON bingo_games(status);
-            CREATE INDEX IF NOT EXISTS idx_players_game   ON bingo_players(game_id);
-            CREATE INDEX IF NOT EXISTS idx_history_user   ON game_history(user_id);
+            CREATE TABLE IF NOT EXISTS transactions (
+                id          SERIAL PRIMARY KEY,
+                tg_id       TEXT    NOT NULL,
+                type        TEXT    NOT NULL,
+                amount      INTEGER NOT NULL,
+                ref         TEXT    UNIQUE NOT NULL,
+                note        TEXT,
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS idx_tx_tgid ON transactions(tg_id);
+            CREATE INDEX IF NOT EXISTS idx_users_tg_id      ON users(tg_id);
+            CREATE INDEX IF NOT EXISTS idx_games_status     ON bingo_games(status);
+            CREATE INDEX IF NOT EXISTS idx_games_bet_status ON bingo_games(bet_amount, status);
+            CREATE INDEX IF NOT EXISTS idx_players_game     ON bingo_players(game_id);
+            CREATE INDEX IF NOT EXISTS idx_players_user     ON bingo_players(user_id);
+            CREATE INDEX IF NOT EXISTS idx_history_user     ON game_history(user_id);
         """
         conn = _get_conn()
         try:
@@ -388,6 +408,15 @@ def init_db():
                 "ALTER TABLE bingo_players ADD COLUMN IF NOT EXISTS bet_paid INTEGER NOT NULL DEFAULT 1",
                 "ALTER TABLE bingo_players ADD COLUMN IF NOT EXISTS picked_number2 INTEGER",
                 "ALTER TABLE bingo_players ADD COLUMN IF NOT EXISTS kicked INTEGER NOT NULL DEFAULT 0",
+                "CREATE INDEX IF NOT EXISTS idx_games_bet_status ON bingo_games(bet_amount, status)",
+                "CREATE INDEX IF NOT EXISTS idx_players_user ON bingo_players(user_id)",
+                """CREATE TABLE IF NOT EXISTS transactions (
+                    id SERIAL PRIMARY KEY, tg_id TEXT NOT NULL,
+                    type TEXT NOT NULL, amount INTEGER NOT NULL,
+                    ref TEXT UNIQUE NOT NULL, note TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )""",
+                "CREATE INDEX IF NOT EXISTS idx_tx_tgid ON transactions(tg_id)",
                 "ALTER TABLE bingo_players ADD COLUMN IF NOT EXISTS picked_number2 INTEGER",
             ]
             conn2 = _get_conn()
@@ -685,7 +714,9 @@ class GameEngine:
 
 @app.route('/')
 def serve_index():
-    return send_from_directory('static', 'index.html')
+    resp = send_from_directory('static', 'index.html')
+    resp.headers['Cache-Control'] = 'no-cache'
+    return resp
 
 @app.route('/api/auth', methods=['POST'])
 def auth():
@@ -788,21 +819,79 @@ def list_games():
         params.append(bet)
     sql += ' GROUP BY g.id ORDER BY g.created_at DESC'
     games = query_db(sql, params)
-    now   = time.time()
+    if not games:
+        return jsonify([])
+    now = time.time()
+    # Batch-fetch all players for all active games in ONE query (eliminates N+1)
+    gids = [g['id'] for g in games]
+    ph_list = ','.join(['?' ] * len(gids))
+    all_bp = query_db(
+        f'SELECT bp.game_id, u.username, bp.picked_number, bp.bet_paid '
+        f'FROM bingo_players bp JOIN users u ON bp.user_id=u.id '
+        f'WHERE bp.game_id IN ({ph_list})', gids
+    )
+    bp_by_game: dict = {}
+    for p in all_bp:
+        bp_by_game.setdefault(p['game_id'], []).append(p)
     for gm in games:
-        gm['pot']   = gm['player_count'] * gm['bet_amount']
-        gm['prize'] = int(gm['pot'] * (1 - HOUSE_CUT))
+        players   = bp_by_game.get(gm['id'], [])
+        pot_units = sum(p.get('bet_paid', 1) for p in players)
+        gm['pot']          = pot_units * gm['bet_amount']
+        gm['prize']        = int(gm['pot'] * (1 - HOUSE_CUT))
+        gm['player_count'] = len(players)
+        gm['players']      = [{'username': p['username'], 'picked_number': p['picked_number']} for p in players]
         csat = gm.get('countdown_started_at')
         gm['countdown_remaining'] = (
             max(0, COUNTDOWN_SECS - int(now - csat))
             if gm['status'] == 'countdown' and csat else COUNTDOWN_SECS
         )
-        players = query_db(
-            'SELECT u.username, bp.picked_number FROM bingo_players bp '
-            'JOIN users u ON bp.user_id=u.id WHERE bp.game_id=?', (gm['id'],)
-        )
-        gm['players'] = players
     return jsonify(games)
+
+@app.route('/api/lobby', methods=['GET'])
+def get_lobby():
+    """Single endpoint returns user + all active games — replaces 3 round-trips with 1."""
+    user, _, err = require_auth()
+    if err: return err
+    # Fresh user
+    fresh = query_db('SELECT * FROM users WHERE id=?', (user['id'],), one=True)
+    d = dict(fresh)
+    try:
+        d['is_owner'] = (int(d.get('tg_id', 0)) == OWNER_TG_ID)
+    except (ValueError, TypeError):
+        d['is_owner'] = False
+    # All active games
+    games = query_db("""
+        SELECT g.*, COUNT(p.id) as player_count
+        FROM bingo_games g
+        LEFT JOIN bingo_players p ON g.id=p.game_id
+        WHERE g.status IN ('waiting','countdown','active')
+        GROUP BY g.id ORDER BY g.created_at DESC
+    """)
+    if games:
+        now = time.time()
+        gids = [g['id'] for g in games]
+        ph_list = ','.join(['?'] * len(gids))
+        all_bp = query_db(
+            f'SELECT bp.game_id, u.username, bp.picked_number, bp.bet_paid '
+            f'FROM bingo_players bp JOIN users u ON bp.user_id=u.id '
+            f'WHERE bp.game_id IN ({ph_list})', gids
+        )
+        bp_by_game: dict = {}
+        for p in all_bp:
+            bp_by_game.setdefault(p['game_id'], []).append(p)
+        for gm in games:
+            players   = bp_by_game.get(gm['id'], [])
+            pot_units = sum(p.get('bet_paid', 1) for p in players)
+            gm['pot']          = pot_units * gm['bet_amount']
+            gm['prize']        = int(gm['pot'] * (1 - HOUSE_CUT))
+            gm['player_count'] = len(players)
+            gm['players']      = [{'username': p['username'], 'picked_number': p['picked_number']} for p in players]
+            csat = gm.get('countdown_started_at')
+            gm['countdown_remaining'] = (
+                max(0, COUNTDOWN_SECS - int(now - csat))
+                if gm['status'] == 'countdown' and csat else COUNTDOWN_SECS
+            )
+    return jsonify({'user': d, 'games': games or []})
 
 @app.route('/api/games', methods=['POST'])
 def create_game():
@@ -841,27 +930,28 @@ def get_game(gid):
         max(0, COUNTDOWN_SECS - int(now - csat))
         if gm['status'] == 'countdown' and csat else COUNTDOWN_SECS
     )
-    players = query_db(
-        'SELECT u.username, bp.picked_number, bp.picked_number2, bp.has_bingo '
-        'FROM bingo_players bp JOIN users u ON bp.user_id=u.id WHERE bp.game_id=?', (gid,)
+    # Single query gets players + pot units + my_player in one round-trip
+    all_players = query_db(
+        'SELECT bp.*, u.username FROM bingo_players bp '
+        'JOIN users u ON bp.user_id=u.id WHERE bp.game_id=?', (gid,)
     )
-    gm['players']      = players
-    gm['player_count'] = len(players)
-    _pot_units = query_db('SELECT COALESCE(SUM(bet_paid),0) AS s FROM bingo_players WHERE game_id=?', (gid,), one=True)
-    gm['pot']   = int((_pot_units['s'] or 0)) * gm['bet_amount']
+    pot_units = sum(p.get('bet_paid', 1) for p in all_players)
+    gm['players']      = [{'username': p['username'], 'picked_number': p['picked_number'],
+                            'picked_number2': p.get('picked_number2'),
+                            'has_bingo': p['has_bingo']} for p in all_players]
+    gm['player_count'] = len(all_players)
+    gm['pot']          = pot_units * gm['bet_amount']
     gm['prize']        = int(gm['pot'] * (1 - HOUSE_CUT))
-    prow = query_db(
-        'SELECT * FROM bingo_players WHERE game_id=? AND user_id=?', (gid, user['id']), one=True
-    )
-    if prow:
+    my_row = next((p for p in all_players if p['user_id'] == user['id']), None)
+    if my_row:
         gm['my_player'] = {
-            'card':         json.loads(prow['card']  or '[]'),
-            'card2':        json.loads(prow['card2'] or 'null') if prow.get('card2') else None,
-            'marked_cells': json.loads(prow['marked_cells'] or '[[2,2]]'),
-            'marked2':      json.loads(prow.get('marked2') or '[[2,2]]'),
-            'has_bingo':    prow['has_bingo'],
-            'kicked':       prow.get('kicked', 0),
-            'bet_paid':     prow.get('bet_paid', 1),
+            'card':         json.loads(my_row['card']  or '[]'),
+            'card2':        json.loads(my_row['card2'] or 'null') if my_row.get('card2') else None,
+            'marked_cells': json.loads(my_row['marked_cells'] or '[[2,2]]'),
+            'marked2':      json.loads(my_row.get('marked2') or '[[2,2]]'),
+            'has_bingo':    my_row['has_bingo'],
+            'kicked':       my_row.get('kicked', 0),
+            'bet_paid':     my_row.get('bet_paid', 1),
         }
     return jsonify(gm)
 
@@ -1998,8 +2088,19 @@ async def cmd_adep(message: Message, session: aiohttp.ClientSession):
         users  = await bot_api('GET', '/api/admin/users', tg_id=message.from_user.id, session=session)
         target = next((u for u in users if u['tg_id'] == str(tid)), None)
         if not target: await message.answer('⚠️ User not found.'); return
+        # Idempotency: build a ref from admin_tg + user_tg + amount + minute-bucket
+        import hashlib as _hl
+        ref_raw = f"dep:{tid}:{int(amt)}:{int(time.time())//300}"
+        tx_ref  = _hl.md5(ref_raw.encode()).hexdigest()[:16]
+        # Check if this deposit was already processed
+        existing_tx = query_db('SELECT id FROM transactions WHERE ref=?', (tx_ref,), one=True)
+        if existing_tx:
+            await message.answer('⚠️ This deposit appears to have already been processed (duplicate).'); return
         res = await bot_api('POST', '/api/admin/funds', tg_id=message.from_user.id,
                             body={'username': target['username'], 'amount': int(amt)}, session=session)
+        # Record transaction
+        execute_db('INSERT INTO transactions (tg_id, type, amount, ref, note) VALUES (?,?,?,?,?)',
+                   (str(tid), 'deposit', int(amt), tx_ref, f'admin:{message.from_user.id}'))
         bonus_res = await bot_api('POST', '/api/deposit-complete', tg_id=message.from_user.id,
                                   body={'tg_id': str(tid), 'amount': int(amt)}, session=session)
         bonus     = bonus_res.get('bonus', 0)
