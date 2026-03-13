@@ -563,6 +563,8 @@ body::before {
   will-change: opacity;  /* only animate opacity, not layout */
 }
 @keyframes timer-pulse { 0%,100%{opacity:1}50%{opacity:.85} }
+@keyframes num-pop { 0%{transform:scale(1.4);color:var(--gold)} 60%{transform:scale(1.05)} 100%{transform:scale(1);color:inherit} }
+.num-pop { animation: num-pop 0.5s ease-out forwards; }
 .countdown-label { font-size:11px; color:var(--text3); letter-spacing:2px; text-transform:uppercase; }
 .waiting-status  { font-size:12px; color:var(--text2); text-align:center; margin-top:4px; }
 
@@ -1054,7 +1056,7 @@ body::before {
     <!-- ── HISTORY ── -->
     <div class="screen" id="screen-history">
       <div class="card card-gold fade-in">
-        <div class="card-title">📜 Game History</div>
+        <div class="card-title" id="history-title">📜 Game History</div>
         <div id="history-list"></div>
       </div>
     </div>
@@ -1562,7 +1564,15 @@ function goToLobby() {
   refreshLobby();
   startLobbyPolling();
 }
-function openNav()  { document.getElementById('nav-drawer').classList.add('open'); document.getElementById('nav-overlay').classList.add('open'); }
+function openNav()  {
+  // Block nav while in a waiting/active game — player must leave/forfeit first
+  if (S.currentGameId) {
+    toast('Leave or forfeit the game first to access the menu.', 'error');
+    return;
+  }
+  document.getElementById('nav-drawer').classList.add('open');
+  document.getElementById('nav-overlay').classList.add('open');
+}
 function closeNav() { document.getElementById('nav-drawer').classList.remove('open'); document.getElementById('nav-overlay').classList.remove('open'); }
 
 /* ══════════════════════════════════════════════════════════
@@ -2031,15 +2041,20 @@ async function pollGame() {
     if (gm.status === 'waiting' || gm.status === 'countdown') {
       if (leaveBtn) leaveBtn.textContent = 'Leave Game';
       showPhase('phase-waiting');
-      const remaining = gm.countdown_remaining ?? 30;
-      document.getElementById('countdown-display').textContent = formatTime(remaining);
       document.getElementById('game-player-count').textContent = gm.player_count + ' player' + (gm.player_count!==1?'s':'');
       document.getElementById('game-room-label').textContent = gm.id;
       if (gm.status === 'waiting') {
+        _stopCountdownTick();
         _countdownStarted = false; _gameIsActive = false;
+        document.getElementById('countdown-display').textContent = formatTime(30);
         document.getElementById('waiting-status-msg').textContent = '⏳ Waiting for another player to join…';
         document.getElementById('game-status-chip').innerHTML = '<div class="chip chip-gold">WAITING</div>';
       } else {
+        // Countdown: seed client ticker from server value, only re-seed if server differs by >2s
+        const serverSecs = gm.countdown_remaining ?? 30;
+        if (!_countdownStarted || Math.abs(_countdownValue - serverSecs) > 2) {
+          _startCountdownTick(serverSecs);
+        }
         _countdownStarted = true; _gameIsActive = false;
         document.getElementById('waiting-status-msg').textContent = '✅ Countdown started! Get ready…';
         document.getElementById('game-status-chip').innerHTML = '<div class="chip chip-green"><span class="dot"></span>COUNTDOWN</div>';
@@ -2048,14 +2063,22 @@ async function pollGame() {
 
     if (gm.status === 'active') {
       if (leaveBtn) leaveBtn.textContent = 'Forfeit Game';
+      _stopCountdownTick();
       _gameIsActive = true;
       showPhase('phase-active');
       const called = gm.called_numbers || [];
       document.getElementById('called-count').textContent = called.length;
       document.getElementById('active-player-count').textContent = gm.player_count + ' players';
       if (called.length > 0) {
-        // called numbers are "B-7" format — display as-is
-        document.getElementById('current-call-num').textContent = called[called.length-1];
+        const el = document.getElementById('current-call-num');
+        const latest = called[called.length-1];
+        if (called.length !== S.prevCalledLen) {
+          // New number called — animate it
+          el.textContent = latest;
+          el.classList.remove('num-pop');
+          void el.offsetWidth; // force reflow to restart animation
+          el.classList.add('num-pop');
+        }
       }
       S.prevCalledLen = called.length;
       renderCalledBubbles(called);
@@ -2217,11 +2240,33 @@ function showResult(won, balance, winnerName, kicked=false) {
   const replayBtns = document.getElementById('result-replay-btns');
   if (replayBtns) replayBtns.style.display = S.lastCard ? 'block' : 'none';
   showScreen('screen-result');
+  _stopCountdownTick();
   S.currentGameId=null; S.myCard=null; S.myCard2=null; S.dualCard=false; _countdownStarted=false;
   startLobbyPolling();
 }
 
 let _countdownStarted = false;
+let _countdownValue   = 30;   // client-side copy, ticked every second
+let _countdownTicker  = null; // setInterval handle
+
+function _startCountdownTick(initialSecs) {
+  _countdownValue = Math.max(0, initialSecs);
+  if (_countdownTicker) clearInterval(_countdownTicker);
+  _updateCountdownDisplay();
+  _countdownTicker = setInterval(() => {
+    _countdownValue = Math.max(0, _countdownValue - 1);
+    _updateCountdownDisplay();
+  }, 1000);
+}
+
+function _stopCountdownTick() {
+  if (_countdownTicker) { clearInterval(_countdownTicker); _countdownTicker = null; }
+}
+
+function _updateCountdownDisplay() {
+  const el = document.getElementById('countdown-display');
+  if (el) el.textContent = formatTime(_countdownValue);
+}
 let _gameIsActive = false;
 /* Play Again — reuse same card/lucky number in a fresh game */
 async function playAgain() {
@@ -2278,6 +2323,7 @@ async function doLeave(confirmed) {
   document.getElementById('leave-modal').style.display = 'none';
   if (!confirmed) return;
   clearTimeout(S.gamePolling);
+  _stopCountdownTick();
   const gid = S.currentGameId;
   S.gamePolling=null;
   // Tell server the player is leaving
@@ -2328,17 +2374,23 @@ async function loadHistory() {
   try {
     const rows = await api('GET', '/api/history');
     if (!rows.length) { el.innerHTML = '<div class="empty"><div class="empty-icon">📜</div>No games played yet.</div>'; return; }
-    el.innerHTML = rows.map(h => `
+    document.getElementById('history-title') && (document.getElementById('history-title').textContent = `📜 History (last ${rows.length} game${rows.length!==1?'s':''})`);
+    el.innerHTML = rows.map(h => {
+      const isLeft = h.result === 'left';
+      const colour = h.won ? 'var(--green)' : isLeft ? 'var(--text3)' : 'var(--red)';
+      const icon   = h.won ? '✓' : isLeft ? '↩' : '✗';
+      const label  = h.won ? 'WIN' : isLeft ? 'LEFT' : 'LOSS';
+      const amount = h.won ? '+' + h.prize_won.toLocaleString() : isLeft ? '—' : '-' + h.bet_amount;
+      return `
       <div class="lb-row">
-        <div class="lb-rank" style="color:${h.won?'var(--green)':'var(--red)'}">${h.won?'✓':'✗'}</div>
+        <div class="lb-rank" style="color:${colour}">${icon}</div>
         <div>
-          <div style="font-weight:700;font-size:13px">${h.won?'WIN':'LOSS'} · ${h.bet_amount} ETB</div>
+          <div style="font-weight:700;font-size:13px">${label} · ${h.bet_amount} ETB</div>
           <div style="font-size:10px;color:var(--text3)">${new Date(h.played_at).toLocaleString()}</div>
         </div>
-        <div style="font-weight:700;color:${h.won?'var(--green)':'var(--red)'}">
-          ${h.won?'+'+h.prize_won.toLocaleString():'-'+h.bet_amount} ETB
-        </div>
-      </div>`).join('');
+        <div style="font-weight:700;color:${colour}">${amount} ETB</div>
+      </div>`;
+    }).join('');
   } catch (e) { el.innerHTML = '<div class="empty">Could not load history.</div>'; }
 }
 
