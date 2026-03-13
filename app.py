@@ -372,6 +372,7 @@ def init_db():
                 bet_amount  INTEGER,
                 prize_won   INTEGER NOT NULL DEFAULT 0,
                 won         INTEGER NOT NULL DEFAULT 0,
+                result      TEXT    NOT NULL DEFAULT 'loss',
                 played_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
             CREATE TABLE IF NOT EXISTS transactions (
@@ -417,6 +418,7 @@ def init_db():
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )""",
                 "CREATE INDEX IF NOT EXISTS idx_tx_tgid ON transactions(tg_id)",
+                "ALTER TABLE game_history ADD COLUMN IF NOT EXISTS result TEXT NOT NULL DEFAULT 'loss'",
                 "ALTER TABLE bingo_players ADD COLUMN IF NOT EXISTS picked_number2 INTEGER",
             ]
             conn2 = _get_conn()
@@ -563,7 +565,7 @@ def require_admin():
 # ══════════════════════════════════════════════════════════════════════════════
 def generate_bingo_card(seed: int) -> list:
     """Standard BINGO card: B=1-15, I=16-30, N=31-45, G=46-60, O=61-75. 5 per col, FREE centre."""
-    rng    = random.Random(seed ^ int(time.time() * 10) % 0xFFFF)
+    rng    = random.Random(seed)  # purely deterministic — same number → same card always
     ranges = [(1,15),(16,30),(31,45),(46,60),(61,75)]
     cols   = []
     for lo, hi in ranges:
@@ -1038,18 +1040,20 @@ def leave_game(gid):
         cost   = gm['bet_amount'] * prow.get('bet_paid', 1)
         status = gm['status']
         execute_db('UPDATE bingo_players SET kicked=1 WHERE id=?', (prow['id'],))
-        execute_db('UPDATE users SET games_played=games_played+1 WHERE id=?', (user['id'],))
-        execute_db(
-            'INSERT INTO game_history (user_id,game_id,bet_amount,prize_won,won) VALUES (?,?,?,0,0)',
-            (user['id'], gid, cost)
-        )
         if status in ('waiting', 'countdown'):
+            # Refunded — game never started for them, no history entry
             execute_db('UPDATE users SET balance=balance+? WHERE id=?', (cost, user['id']))
             remaining_all = query_db('SELECT id FROM bingo_players WHERE game_id=? AND kicked=0', (gid,))
             if not remaining_all:
                 execute_db("UPDATE bingo_games SET status='finished', finished_at=? WHERE id=?",
                            (time.time(), gid))
             return jsonify({'ok': True, 'refunded': True})
+        # Active forfeit — record as 'left' (not a loss)
+        execute_db('UPDATE users SET games_played=games_played+1 WHERE id=?', (user['id'],))
+        execute_db(
+            "INSERT INTO game_history (user_id,game_id,bet_amount,prize_won,won,result) VALUES (?,?,?,0,0,'left')",
+            (user['id'], gid, cost)
+        )
         remaining = query_db(
             'SELECT * FROM bingo_players WHERE game_id=? AND kicked=0', (gid,)
         )
@@ -1063,11 +1067,17 @@ def leave_game(gid):
                 ('UPDATE bingo_players SET has_bingo=1 WHERE id=?', (sole['id'],)),
                 ('UPDATE users SET balance=balance+?, wins=wins+1, games_played=games_played+1, total_won=total_won+? WHERE id=?',
                  (prize2, prize2, sole['user_id'])),
-                ('INSERT INTO game_history (user_id,game_id,bet_amount,prize_won,won) VALUES (?,?,?,?,1)',
+                ("INSERT INTO game_history (user_id,game_id,bet_amount,prize_won,won,result) VALUES (?,?,?,?,1,'win')",
                  (sole['user_id'], gid, gm['bet_amount'], prize2)),
             ])
             _notify_queue.put({'tg_id': sole['user_id'], 'event': '_last_standing', 'data': {'prize': prize2}})
             return jsonify({'ok': True, 'last_standing': True})
+        # Notify remaining players that someone forfeited
+        for p in remaining:
+            urow = query_db('SELECT tg_id FROM users WHERE id=?', (p['user_id'],), one=True)
+            if urow:
+                _notify_queue.put({'tg_id': urow['tg_id'], 'event': 'player_forfeited',
+                                   'data': {'remaining': len(remaining)}})
     return jsonify({'ok': True})
 
 @app.route('/api/games/<gid>/mark', methods=['POST'])
@@ -1152,7 +1162,7 @@ def claim_bingo(gid):
                 'UPDATE users SET games_played=games_played+1 WHERE id=?', (user['id'],)
             )
             execute_db(
-                'INSERT INTO game_history (user_id,game_id,bet_amount,prize_won,won) VALUES (?,?,?,0,0)',
+                "INSERT INTO game_history (user_id,game_id,bet_amount,prize_won,won,result) VALUES (?,?,?,0,0,'loss')",
                 (user['id'], gid, gm['bet_amount'] * prow.get('bet_paid', 1))
             )
             # Check remaining active players after kick
@@ -1169,7 +1179,7 @@ def claim_bingo(gid):
                     ('UPDATE bingo_players SET has_bingo=1 WHERE id=?', (sole['id'],)),
                     ('UPDATE users SET balance=balance+?, wins=wins+1, games_played=games_played+1, '
                      'total_won=total_won+? WHERE id=?', (prize2, prize2, sole['user_id'])),
-                    ('INSERT INTO game_history (user_id,game_id,bet_amount,prize_won,won) VALUES (?,?,?,?,1)',
+                    ("INSERT INTO game_history (user_id,game_id,bet_amount,prize_won,won,result) VALUES (?,?,?,?,1,'win')",
                      (sole['user_id'], gid, gm['bet_amount'], prize2)),
                 ])
                 _notify_queue.put({'tg_id': sole['user_id'], 'event': '_last_standing',
@@ -1186,7 +1196,7 @@ def claim_bingo(gid):
             ('UPDATE bingo_players SET has_bingo=1 WHERE id=?', (prow['id'],)),
             ('UPDATE users SET balance=balance+?, wins=wins+1, games_played=games_played+1, '
              'total_won=total_won+? WHERE id=?', (prize, prize, user['id'])),
-            ('INSERT INTO game_history (user_id,game_id,bet_amount,prize_won,won) VALUES (?,?,?,?,1)',
+            ("INSERT INTO game_history (user_id,game_id,bet_amount,prize_won,won,result) VALUES (?,?,?,?,1,'win')",
              (user['id'], gid, gm['bet_amount'], prize)),
         ])
         losers = query_db(
@@ -1196,7 +1206,7 @@ def claim_bingo(gid):
         for lo in losers:
             execute_many([
                 ('UPDATE users SET games_played=games_played+1 WHERE id=?', (lo['user_id'],)),
-                ('INSERT INTO game_history (user_id,game_id,bet_amount,prize_won,won) VALUES (?,?,?,0,0)',
+                ("INSERT INTO game_history (user_id,game_id,bet_amount,prize_won,won,result) VALUES (?,?,?,0,0,'loss')",
                  (lo['user_id'], gid, gm['bet_amount'] * lo.get('bet_paid', 1))),
             ])
         fresh = query_db('SELECT * FROM users WHERE id=?', (user['id'],), one=True)
@@ -1207,7 +1217,7 @@ def get_history():
     user, _, err = require_auth()
     if err: return err
     rows = query_db(
-        'SELECT * FROM game_history WHERE user_id=? ORDER BY played_at DESC LIMIT 50',
+        'SELECT * FROM game_history WHERE user_id=? ORDER BY played_at DESC LIMIT 15',
         (user['id'],)
     )
     return jsonify(rows)
@@ -1754,7 +1764,7 @@ async def cmd_history(message: Message, session: aiohttp.ClientSession):
         f" · {h['bet_amount']} bet · {str(h['played_at'])[:10]}"
         for h in his[:20]
     ]
-    await message.answer('📜 <b>Game History (last 20)</b>\n\n' + '\n'.join(lines))
+    await message.answer('📜 <b>Game History (last 15)</b>\n\n' + '\n'.join(lines))
 
 # /referral ───────────────────────────────────────────────────────────────────
 @bot_router.message(Command('referral'))
@@ -2188,6 +2198,8 @@ async def _drain_notify_queue(bot: Bot):
     """
     event_map = {
         'win':               lambda d: f"🏆 <b>BINGO! You won!</b>\n\n+{d.get('prize',0):,} ETB added to your wallet! 🎱",
+        '_last_standing':    lambda d: f"🥇 <b>You're the last one standing!</b>\n\nAll other players left — the pot is yours!\n+{d.get('prize',0):,} ETB added to your wallet! 🎉",
+        'player_forfeited':  lambda d: f"⚠️ <b>A player forfeited!</b>\n\nGame continues with {d.get('remaining',1)} player{'s' if d.get('remaining',1)!=1 else ''} remaining. Keep marking! 🎱",
         'game_start':        lambda d: '🔔 <b>Your game is starting!</b>\nOpen the app and mark your card!',
         'deposit_approved':  lambda d: f"✅ <b>Deposit Approved!</b>\n\n<b>{d.get('amount',0):,.0f} ETB</b> added.\nBalance: <b>{d.get('new_balance',0):,} ETB</b>",
         'custom':            lambda d: d.get('message', ''),
