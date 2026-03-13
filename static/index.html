@@ -460,6 +460,7 @@ body::before {
 .num-cell:hover   { background:var(--surface3); border-color:var(--gold3); color:var(--gold); }
 .num-cell.taken   { background:rgba(245,78,78,.1); border-color:rgba(245,78,78,.3); color:var(--red); cursor:not-allowed; opacity:.7; }
 .num-cell.chosen  { background:linear-gradient(135deg,var(--gold),var(--gold2)); border-color:var(--gold); color:#000; transform:scale(1.12); box-shadow:var(--glow-gold); }
+.num-cell.chosen2 { background:linear-gradient(135deg,#00c853,#1de9b6); border-color:var(--green); color:#000; transform:scale(1.12); box-shadow:0 0 10px rgba(0,200,83,.55); }
 
 /* ══════════════════════════════════════════════════════════
    SCREEN 5 — CARD PREVIEW
@@ -936,11 +937,17 @@ body::before {
 
 
 
-      <!-- Card 2 pick status (shown when dual enabled) -->
-      <div id="card2-pick-status" style="display:none;margin-top:-6px;margin-bottom:4px;padding:8px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;font-size:12px">
-        <span style="color:var(--text2)">🃏 Card 2 number: </span>
-        <span id="chosen-num2-display" style="font-family:'Orbitron',monospace;font-weight:900;color:var(--green)">—</span>
-        <span id="card2-pick-hint" style="color:var(--text3);margin-left:6px">← tap a number above</span>
+      <!-- Card 2 chosen panel (shown when dual enabled) -->
+      <div id="card2-pick-status" style="display:none">
+        <div class="card slide-up" style="border-color:var(--green);margin-bottom:0">
+          <div style="display:flex;align-items:center;gap:10px">
+            <div style="font-family:'Orbitron',monospace;font-size:36px;font-weight:900;color:var(--green)" id="chosen-num2-display">—</div>
+            <div style="flex:1">
+              <div style="font-size:13px;font-weight:700;color:var(--text)">Card 2 Lucky Number</div>
+              <div style="font-size:11px;color:var(--text3);margin-top:2px" id="card2-pick-hint">← Tap a number above to pick</div>
+            </div>
+          </div>
+        </div>
       </div>
       <button class="btn btn-ghost" style="margin-top:4px" onclick="stopPickerPoll();showScreen('screen-lobby');startLobbyPolling()">← Back to Lobby</button>
     </div>
@@ -1932,14 +1939,26 @@ function renderOnePreviewCard(elId, card, pickedNum) {
 }
 
 function changePreviewNum(cardNum) {
-  if (cardNum === 2) {
+  if (cardNum === 1) {
+    // Clear card1 number so picker routes next tap to card1 (not card2)
+    S.pickedNumber = null;
+    S.previewCard  = null;
+    document.getElementById('chosen-num-display').textContent = '—';
+    document.getElementById('picker-chosen-panel').style.display = 'none';
+    buildNumGrid(_lastTakenNumbers);
+  } else {
     // Deselect card2 number and go back to picker
     S.pickedNumber2 = null;
+    S.previewCard2  = null;
     document.getElementById('chosen-num2-display').textContent = '—';
     const hint = document.getElementById('card2-pick-hint');
-    if (hint) hint.style.display = 'inline';
+    if (hint) hint.style.display = 'block';
     buildNumGrid(_lastTakenNumbers);
   }
+  // Re-start picker poll (was stopped by goToPreview)
+  stopPickerPoll();
+  _pollPickerGame();
+  _pickerPollInterval = setInterval(_pollPickerGame, 2000);
   showScreen('screen-picker');
 }
 
@@ -2208,7 +2227,7 @@ function handleGameFinished(gm) {
   }
 }
 
-function showResult(won, balance, winnerName, kicked=false) {
+function showResult(won, balance, winnerName, kicked=false, forfeited=false, forfeitedAmt=0) {
   // Save state for Play Again before clearing
   if (S.selectedBet && S.pickedNumber) {
     S.lastBet        = S.selectedBet;
@@ -2225,6 +2244,14 @@ function showResult(won, balance, winnerName, kicked=false) {
       <div class="result-prize">+${(balance||0).toLocaleString()} ETB Balance</div>
       <div class="result-sub">Winnings added to your wallet.</div></div>`;
   } else {
+    if (forfeited) {
+      el.innerHTML = `<div class="card lose-bg fade-in" style="text-align:center;margin-bottom:12px">
+        <div class="result-icon">🏳️</div>
+        <div class="result-title" style="color:var(--red)">FORFEITED</div>
+        <div style="font-size:15px;font-weight:700;color:var(--text2);margin-bottom:6px">You left during an active game.</div>
+        <div class="result-prize" style="color:var(--red)">-${forfeitedAmt.toLocaleString()} ETB</div>
+        <div class="result-sub">Your bet was forfeited. Better luck next time!</div></div>`;
+    } else {
     const icon = kicked ? '🚫' : (winnerName === '__last_standing__' ? '🏆' : '😔');
     const title= kicked ? 'KICKED!' : (winnerName === '__last_standing__' ? 'YOU WIN!' : 'GAME OVER');
     const col  = winnerName === '__last_standing__' ? 'var(--green)' : (kicked ? 'var(--red)' : 'var(--red)');
@@ -2235,6 +2262,7 @@ function showResult(won, balance, winnerName, kicked=false) {
       <div class="result-icon">${icon}</div><div class="result-title" style="color:${col}">${title}</div>
       <div style="font-size:15px;font-weight:700;color:var(--text2);margin-bottom:6px">${msg}</div>
       <div class="result-sub">${winnerName==='__last_standing__'?'Winnings added to your wallet.':'Better luck next time!'}</div></div>`;
+    }
   }
   // Show Play Again button only if we have a saved card
   const replayBtns = document.getElementById('result-replay-btns');
@@ -2330,11 +2358,33 @@ async function doLeave(confirmed) {
   if (gid) {
     try {
       const res = await api('POST', `/api/games/${gid}/leave`, {});
+      if (res.refunded) {
+        // Waiting/countdown — refunded, go to lobby silently
+        S.currentGameId=null; S.myCard=null; S.myCard2=null; S.myMarked=[[2,2]]; S.myMarked2=[[2,2]];
+        S.dualCard=false; _countdownStarted=false;
+        showScreen('screen-lobby'); startLobbyPolling();
+        return;
+      }
       if (res.last_standing) {
-        // We were the last one — we won
-        S.currentGameId = gid; // keep so showResult can save state
+        // Last player remaining — we won the pot
+        S.currentGameId = gid;
         await refreshUser();
-        showResult(false, 0, '__last_standing__');
+        showResult(true, res.prize || 0);
+        return;
+      }
+      if (res.forfeited) {
+        // Active forfeit — save replay state then show forfeit screen
+        S.currentGameId = gid;
+        // Explicitly save Play Again state (same as top of showResult)
+        if (S.selectedBet && S.pickedNumber) {
+          S.lastBet        = S.selectedBet;
+          S.lastPickedNum  = S.pickedNumber;
+          S.lastPickedNum2 = S.pickedNumber2;
+          S.lastCard       = S.myCard;
+          S.lastCard2      = S.myCard2;
+          S.lastDual       = S.dualCard;
+        }
+        showResult(false, 0, null, false, true, res.forfeited);
         return;
       }
     } catch(_) {}
@@ -2380,7 +2430,7 @@ async function loadHistory() {
       const colour = h.won ? 'var(--green)' : isLeft ? 'var(--text3)' : 'var(--red)';
       const icon   = h.won ? '✓' : isLeft ? '↩' : '✗';
       const label  = h.won ? 'WIN' : isLeft ? 'LEFT' : 'LOSS';
-      const amount = h.won ? '+' + h.prize_won.toLocaleString() : isLeft ? '—' : '-' + h.bet_amount;
+      const amount = h.won ? '+' + h.prize_won.toLocaleString() : '-' + h.bet_amount.toLocaleString();
       return `
       <div class="lb-row">
         <div class="lb-rank" style="color:${colour}">${icon}</div>
