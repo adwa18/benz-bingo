@@ -1071,14 +1071,14 @@ def leave_game(gid):
                  (sole['user_id'], gid, gm['bet_amount'], prize2)),
             ])
             _notify_queue.put({'tg_id': sole['user_id'], 'event': '_last_standing', 'data': {'prize': prize2}})
-            return jsonify({'ok': True, 'last_standing': True})
+            return jsonify({'ok': True, 'last_standing': True, 'prize': prize2, 'forfeited': cost})
         # Notify remaining players that someone forfeited
         for p in remaining:
             urow = query_db('SELECT tg_id FROM users WHERE id=?', (p['user_id'],), one=True)
             if urow:
                 _notify_queue.put({'tg_id': urow['tg_id'], 'event': 'player_forfeited',
                                    'data': {'remaining': len(remaining)}})
-    return jsonify({'ok': True})
+    return jsonify({'ok': True, 'forfeited': cost})
 
 @app.route('/api/games/<gid>/mark', methods=['POST'])
 def mark_cell(gid):
