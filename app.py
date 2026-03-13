@@ -2020,6 +2020,24 @@ async def withdraw_account_name(message: Message, state: FSMContext):
     )
 
 # 🆘 Support ──────────────────────────────────────────────────────────────────
+@bot_router.message(Command('transactions'))
+async def cmd_transactions(message: Message, session: aiohttp.ClientSession):
+    """Show last 10 deposit/withdraw transactions for the user."""
+    tg_id = str(message.from_user.id)
+    rows = query_db(
+        "SELECT type, amount, created_at FROM transactions WHERE tg_id=? ORDER BY created_at DESC LIMIT 10",
+        (tg_id,)
+    )
+    if not rows:
+        await message.answer('📋 No transactions yet.\n\nDeposit or withdraw to see your history.'); return
+    lines = []
+    for r in rows:
+        icon  = '💰' if r['type'] == 'deposit' else '💸'
+        sign  = '+' if r['type'] == 'deposit' else '−'
+        date  = str(r['created_at'])[:10]
+        lines.append(f"{icon} <b>{sign}{r['amount']:,} ETB</b> ({r['type'].title()}) · {date}")
+    await message.answer('📋 <b>Transaction History (last 10)</b>\n\n' + '\n'.join(lines))
+
 @bot_router.message(F.text == '🆘 Support')
 async def cmd_support(message: Message):
     await message.answer(
@@ -2148,9 +2166,14 @@ async def cmd_awdraw(message: Message, session: aiohttp.ClientSession):
         if not target: await message.answer('⚠️ User not found.'); return
         res = await bot_api('POST', '/api/admin/funds', tg_id=message.from_user.id,
                             body={'username': target['username'], 'amount': -int(amt)}, session=session)
+        # Record in transactions table
+        import hashlib as _hl2
+        wr_ref = _hl2.md5(f"wd:{tid}:{int(amt)}:{int(time.time())//300}".encode()).hexdigest()[:16]
+        execute_db('INSERT OR IGNORE INTO transactions (tg_id,type,amount,ref,note) VALUES (?,?,?,?,?)',
+                   (str(tid), 'withdraw', int(amt), wr_ref, f'admin:{message.from_user.id}'))
         await message.answer(f"✅ Withdrawal {amt:,.0f} ETB confirmed for <b>{target['username']}</b>.\nBalance: {res['new_balance']:,} ETB")
-        _notify_queue.put({'tg_id': tid, 'event': 'custom',
-                          'data': {'message': f"✅ <b>Withdrawal Processed!</b>\n{amt:,.0f} ETB sent.\nBalance: <b>{res['new_balance']:,} ETB</b>"}})
+        _notify_queue.put({'tg_id': tid, 'event': 'withdraw_approved',
+                          'data': {'amount': int(amt), 'new_balance': res['new_balance']}})
     except Exception as exc:
         await message.answer(f'⚠️ {exc}')
 
@@ -2201,7 +2224,8 @@ async def _drain_notify_queue(bot: Bot):
         '_last_standing':    lambda d: f"🥇 <b>You're the last one standing!</b>\n\nAll other players left — the pot is yours!\n+{d.get('prize',0):,} ETB added to your wallet! 🎉",
         'player_forfeited':  lambda d: f"⚠️ <b>A player forfeited!</b>\n\nGame continues with {d.get('remaining',1)} player{'s' if d.get('remaining',1)!=1 else ''} remaining. Keep marking! 🎱",
         'game_start':        lambda d: '🔔 <b>Your game is starting!</b>\nOpen the app and mark your card!',
-        'deposit_approved':  lambda d: f"✅ <b>Deposit Approved!</b>\n\n<b>{d.get('amount',0):,.0f} ETB</b> added.\nBalance: <b>{d.get('new_balance',0):,} ETB</b>",
+        'deposit_approved':  lambda d: f"✅ <b>Deposit Approved!</b>\n\n<b>{d.get('amount',0):,.0f} ETB</b> added to your wallet.\nNew balance: <b>{d.get('new_balance',0):,} ETB</b>",
+        'withdraw_approved': lambda d: f"✅ <b>Withdrawal Processed!</b>\n\n<b>{d.get('amount',0):,.0f} ETB</b> sent to your account.\nNew balance: <b>{d.get('new_balance',0):,} ETB</b>",
         'custom':            lambda d: d.get('message', ''),
     }
     while True:
