@@ -500,14 +500,12 @@ body::before {
   background:linear-gradient(135deg,var(--green),#19b865);
   border-color:var(--green); color:#000;
   box-shadow:var(--glow-green);
-  animation:mark-pop .3s ease;
 }
 .bc-cell.called-hl {
   border-color:var(--gold);
   box-shadow:0 0 8px rgba(245,166,35,.4);
   animation:call-flash .5s ease;
 }
-@keyframes mark-pop { 0%{transform:scale(1.25)}100%{transform:scale(1)} }
 @keyframes call-flash { 0%,100%{box-shadow:0 0 8px rgba(245,166,35,.4)}50%{box-shadow:0 0 20px rgba(245,166,35,.8)} }
 
 /* ══════════════════════════════════════════════════════════
@@ -649,7 +647,7 @@ body::before {
   border-left: 2px solid var(--gold);
   padding-left: 5px;
 }
-#bingo-claim-btn {
+#bingo-claim-btn, #bingo-claim-btn2 {
   display:none;
   animation: bingo-pulse .6s ease infinite alternate;
 }
@@ -1031,7 +1029,7 @@ body::before {
           <div class="card-slot" id="card2-area" style="display:none">
             <div class="card-slot-header">
               <span class="game-card-title" style="color:var(--green)">CARD 2</span>
-              <button class="btn btn-green btn-sm" style="font-size:9px;padding:4px 8px" onclick="doClaim(2)">🎉 BINGO!</button>
+              <button class="btn btn-green btn-sm" id="bingo-claim-btn2" onclick="doClaim(2)">🎉 BINGO!</button>
             </div>
             <div class="bingo-card-grid game-card" id="game-card2-grid"></div>
           </div>
@@ -2007,6 +2005,8 @@ function startGameScreen() {
     if (ca) { ca.classList.add('single'); }
   }
   if (cb) cb.style.display = 'inline-block';
+  const cb2 = document.getElementById('bingo-claim-btn2');
+  if (cb2) cb2.style.display = 'inline-block';
   renderGameCard();
   if (S.myCard2) renderGameCard2();
   pollGame();
@@ -2218,7 +2218,7 @@ function handleGameFinished(gm) {
       refreshUser().then(() => showResult(true, _lastPrize || 0));
     } else if (gm.my_player && !gm.my_player.kicked && !winner) {
       // We're still in game, no winner via bingo — last standing
-      refreshUser().then(() => showResult(false, 0, '__last_standing__'));
+      refreshUser().then(() => showResult(true, gm.prize || 0));
     } else {
       showResult(false, 0, winner ? winner.username : null);
     }
@@ -2365,17 +2365,9 @@ async function doLeave(confirmed) {
         showScreen('screen-lobby'); startLobbyPolling();
         return;
       }
-      if (res.last_standing) {
-        // Last player remaining — we won the pot
-        S.currentGameId = gid;
-        await refreshUser();
-        showResult(true, res.prize || 0);
-        return;
-      }
-      if (res.forfeited) {
+      if (res.forfeited && !res.last_standing) {
         // Active forfeit — save replay state then show forfeit screen
         S.currentGameId = gid;
-        // Explicitly save Play Again state (same as top of showResult)
         if (S.selectedBet && S.pickedNumber) {
           S.lastBet        = S.selectedBet;
           S.lastPickedNum  = S.pickedNumber;
