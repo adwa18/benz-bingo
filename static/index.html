@@ -2215,7 +2215,7 @@ function handleGameFinished(gm) {
     const iWon   = winner && winner.username === S.user?.username;
     if (iWon) {
       // Already shown via doClaim / bingo overlay — but handle here for poll-based detection
-      refreshUser().then(() => showResult(true, _lastPrize || 0));
+      refreshUser().then(() => showResult(true, _lastPrize || gm.prize || 0));
     } else if (gm.my_player && !gm.my_player.kicked && !winner) {
       // We're still in game, no winner via bingo — last standing
       refreshUser().then(() => showResult(true, gm.prize || 0));
