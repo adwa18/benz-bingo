@@ -936,6 +936,9 @@ def get_game(gid):
         max(0, COUNTDOWN_SECS - int(now - csat))
         if gm['status'] == 'countdown' and csat else COUNTDOWN_SECS
     )
+    # Client uses server_time + started_at to derive call index locally
+    gm['server_time']    = now
+    gm['call_interval']  = CALL_INTERVAL
     # Single query gets players + pot units + my_player in one round-trip
     all_players = query_db(
         'SELECT bp.*, u.username FROM bingo_players bp '
@@ -1319,6 +1322,22 @@ def admin_funds():
         return jsonify({'error': 'User not found'}), 404
     new_bal = max(0, target['balance'] + int(amount))
     execute_db('UPDATE users SET balance=? WHERE username=?', (new_bal, username))
+    # Record transaction and notify user
+    amt_abs = abs(int(amount))
+    if amt_abs > 0:
+        import hashlib as _hlf
+        tx_type = 'deposit' if int(amount) > 0 else 'withdraw'
+        tx_ref  = _hlf.md5(f"{tx_type}:{target['tg_id']}:{amt_abs}:{int(time.time())//300}".encode()).hexdigest()[:16]
+        try:
+            execute_db(
+                'INSERT INTO transactions (tg_id,type,amount,ref,note) VALUES (?,?,?,?,?)',
+                (target['tg_id'], tx_type, amt_abs, tx_ref, f'admin:{admin["id"]}')
+            )
+        except Exception:
+            pass  # duplicate ref — ignore
+        event = 'deposit_approved' if tx_type == 'deposit' else 'withdraw_approved'
+        _notify_queue.put({'tg_id': int(target['tg_id']), 'event': event,
+                           'data': {'amount': amt_abs, 'new_balance': new_bal}})
     return jsonify({'success': True, 'username': username, 'new_balance': new_bal})
 
 @app.route('/api/admin/games/<gid>/finish', methods=['POST'])
