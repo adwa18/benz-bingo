@@ -1071,7 +1071,7 @@ def leave_game(gid):
                  (sole['user_id'], gid, gm['bet_amount'], prize2)),
             ])
             _notify_queue.put({'tg_id': sole['user_id'], 'event': '_last_standing', 'data': {'prize': prize2}})
-            return jsonify({'ok': True, 'last_standing': True, 'prize': prize2, 'forfeited': cost})
+            return jsonify({'ok': True, 'forfeited': cost})  # forfeiter sees forfeit screen; remaining player detects win via poll
         # Notify remaining players that someone forfeited
         for p in remaining:
             urow = query_db('SELECT tg_id FROM users WHERE id=?', (p['user_id'],), one=True)
