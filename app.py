@@ -331,6 +331,7 @@ def init_db():
                 total_won       INTEGER NOT NULL DEFAULT 0,
                 total_bet       INTEGER NOT NULL DEFAULT 0,
                 is_admin        INTEGER NOT NULL DEFAULT 0,
+                is_banned       INTEGER NOT NULL DEFAULT 0,
                 referral_count  INTEGER NOT NULL DEFAULT 0,
                 referred_by     INTEGER,
                 deposit_count   INTEGER NOT NULL DEFAULT 0,
@@ -419,6 +420,7 @@ def init_db():
                 )""",
                 "CREATE INDEX IF NOT EXISTS idx_tx_tgid ON transactions(tg_id)",
                 "ALTER TABLE game_history ADD COLUMN IF NOT EXISTS result TEXT NOT NULL DEFAULT 'loss'",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_banned INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE bingo_players ADD COLUMN IF NOT EXISTS picked_number2 INTEGER",
             ]
             conn2 = _get_conn()
@@ -550,6 +552,8 @@ def require_auth():
     user, tg = get_current_user()
     if not user:
         return None, None, (jsonify({'error': 'Unauthorized'}), 401)
+    if user.get('is_banned'):
+        return None, None, (jsonify({'error': 'Account banned'}), 403)
     return user, tg, None
 
 def require_admin():
@@ -1336,6 +1340,17 @@ def admin_force_finish(gid):
         )
     return jsonify({'success': True, 'refunded': len(players)})
 
+@app.route('/api/admin/users/<tgid>/ban', methods=['POST'])
+def admin_ban_user(tgid):
+    admin, err = require_admin()
+    if err: return err
+    body   = request.json or {}
+    banned = 1 if body.get('ban') else 0
+    target = query_db('SELECT * FROM users WHERE tg_id=?', (str(tgid),), one=True)
+    if not target: return jsonify({'error': 'User not found'}), 404
+    execute_db('UPDATE users SET is_banned=? WHERE tg_id=?', (banned, str(tgid)))
+    return jsonify({'success': True, 'username': target['username'], 'banned': banned})
+
 @app.route('/api/admin/users/<int:uid>/admin', methods=['POST'])
 def toggle_admin(uid):
     admin, err = require_admin()
@@ -2024,10 +2039,11 @@ async def withdraw_account_name(message: Message, state: FSMContext):
 async def cmd_transactions(message: Message, session: aiohttp.ClientSession):
     """Show last 10 deposit/withdraw transactions for the user."""
     tg_id = str(message.from_user.id)
-    rows = query_db(
-        "SELECT type, amount, created_at FROM transactions WHERE tg_id=? ORDER BY created_at DESC LIMIT 10",
-        (tg_id,)
-    )
+    with StandaloneDB() as sdb:
+        rows = sdb.query(
+            "SELECT type, amount, created_at FROM transactions WHERE tg_id=? ORDER BY created_at DESC LIMIT 10",
+            (tg_id,)
+        )
     if not rows:
         await message.answer('📋 No transactions yet.\n\nDeposit or withdraw to see your history.'); return
     lines = []
@@ -2084,8 +2100,11 @@ async def cmd_admin(message: Message, session: aiohttp.ClientSession):
         f"🔴 Active: {s['active_games']}  ✅ Finished: {s['finished_games']}\n"
         f"💰 Prizes paid: {s['total_prizes']:,} ETB\n\n"
         f"<b>Commands:</b>\n"
+        f"/adminstats — live stats\n"
         f"/admindeposit &lt;tg_id&gt; &lt;amount&gt;\n"
         f"/adminwithdraw &lt;tg_id&gt; &lt;amount&gt;\n"
+        f"/adminban &lt;tg_id&gt; — ban user\n"
+        f"/adminunban &lt;tg_id&gt; — unban user\n"
         f"/adminend &lt;game_id&gt;\n"
         f"/adminmsg &lt;tg_id&gt; &lt;text&gt;\n"
         f"/adminbroadcast &lt;text&gt;",
@@ -2120,15 +2139,17 @@ async def cmd_adep(message: Message, session: aiohttp.ClientSession):
         import hashlib as _hl
         ref_raw = f"dep:{tid}:{int(amt)}:{int(time.time())//300}"
         tx_ref  = _hl.md5(ref_raw.encode()).hexdigest()[:16]
-        # Check if this deposit was already processed
-        existing_tx = query_db('SELECT id FROM transactions WHERE ref=?', (tx_ref,), one=True)
+        # Check if this deposit was already processed (StandaloneDB — no Flask context)
+        with StandaloneDB() as sdb:
+            existing_tx = sdb.one('SELECT id FROM transactions WHERE ref=?', (tx_ref,))
         if existing_tx:
             await message.answer('⚠️ This deposit appears to have already been processed (duplicate).'); return
         res = await bot_api('POST', '/api/admin/funds', tg_id=message.from_user.id,
                             body={'username': target['username'], 'amount': int(amt)}, session=session)
-        # Record transaction
-        execute_db('INSERT INTO transactions (tg_id, type, amount, ref, note) VALUES (?,?,?,?,?)',
-                   (str(tid), 'deposit', int(amt), tx_ref, f'admin:{message.from_user.id}'))
+        # Record transaction (StandaloneDB — no Flask context in bot thread)
+        with StandaloneDB() as sdb:
+            sdb.run('INSERT INTO transactions (tg_id, type, amount, ref, note) VALUES (?,?,?,?,?)',
+                    (str(tid), 'deposit', int(amt), tx_ref, f'admin:{message.from_user.id}'))
         bonus_res = await bot_api('POST', '/api/deposit-complete', tg_id=message.from_user.id,
                                   body={'tg_id': str(tid), 'amount': int(amt)}, session=session)
         bonus     = bonus_res.get('bonus', 0)
@@ -2166,14 +2187,61 @@ async def cmd_awdraw(message: Message, session: aiohttp.ClientSession):
         if not target: await message.answer('⚠️ User not found.'); return
         res = await bot_api('POST', '/api/admin/funds', tg_id=message.from_user.id,
                             body={'username': target['username'], 'amount': -int(amt)}, session=session)
-        # Record in transactions table
+        # Record in transactions table (StandaloneDB — no Flask context in bot thread)
         import hashlib as _hl2
         wr_ref = _hl2.md5(f"wd:{tid}:{int(amt)}:{int(time.time())//300}".encode()).hexdigest()[:16]
-        execute_db('INSERT OR IGNORE INTO transactions (tg_id,type,amount,ref,note) VALUES (?,?,?,?,?)',
-                   (str(tid), 'withdraw', int(amt), wr_ref, f'admin:{message.from_user.id}'))
+        with StandaloneDB() as sdb:
+            try:
+                sdb.run('INSERT INTO transactions (tg_id,type,amount,ref,note) VALUES (?,?,?,?,?)',
+                        (str(tid), 'withdraw', int(amt), wr_ref, f'admin:{message.from_user.id}'))
+            except Exception: pass  # ignore duplicate
         await message.answer(f"✅ Withdrawal {amt:,.0f} ETB confirmed for <b>{target['username']}</b>.\nBalance: {res['new_balance']:,} ETB")
         _notify_queue.put({'tg_id': tid, 'event': 'withdraw_approved',
                           'data': {'amount': int(amt), 'new_balance': res['new_balance']}})
+    except Exception as exc:
+        await message.answer(f'⚠️ {exc}')
+
+@bot_router.message(Command('adminstats'))
+@admin_guard
+async def cmd_astats(message: Message, session: aiohttp.ClientSession):
+    try:
+        s = await bot_api('GET', '/api/admin/stats', tg_id=message.from_user.id, session=session)
+    except Exception as exc:
+        await message.answer(f'⚠️ {exc}'); return
+    await message.answer(
+        f"📊 <b>Admin Stats</b>\n\n"
+        f"👥 Total users:    {s['total_users']}\n"
+        f"🎮 Total games:    {s['total_games']}\n"
+        f"🔴 Active games:   {s['active_games']}\n"
+        f"✅ Finished games: {s['finished_games']}\n"
+        f"💰 Prizes paid:    {s['total_prizes']:,} ETB"
+    )
+
+@bot_router.message(Command('adminban'))
+@admin_guard
+async def cmd_aban(message: Message, session: aiohttp.ClientSession):
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip().isdigit():
+        await message.answer('Usage: /adminban &lt;tg_id&gt;'); return
+    tgid = parts[1].strip()
+    try:
+        res = await bot_api('POST', f'/api/admin/users/{tgid}/ban',
+                            tg_id=message.from_user.id, body={'ban': True}, session=session)
+        await message.answer(f"🚫 <b>{res['username']}</b> has been banned.")
+    except Exception as exc:
+        await message.answer(f'⚠️ {exc}')
+
+@bot_router.message(Command('adminunban'))
+@admin_guard
+async def cmd_aunban(message: Message, session: aiohttp.ClientSession):
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip().isdigit():
+        await message.answer('Usage: /adminunban &lt;tg_id&gt;'); return
+    tgid = parts[1].strip()
+    try:
+        res = await bot_api('POST', f'/api/admin/users/{tgid}/ban',
+                            tg_id=message.from_user.id, body={'ban': False}, session=session)
+        await message.answer(f"✅ <b>{res['username']}</b> has been unbanned.")
     except Exception as exc:
         await message.answer(f'⚠️ {exc}')
 
