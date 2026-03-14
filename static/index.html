@@ -1820,7 +1820,39 @@ async function enterPickerForGame(gameId) {
    NUMBER PICKER
 ══════════════════════════════════════════════════════════ */
 let _lastTakenNumbers = [];
-let _lastPrize = 0;
+let _lastPrize      = 0;
+let _clockOffset    = 0;  // ms diff: server_time - client Date.now()
+let _gameStartedAt  = 0;  // server unix seconds when game went active
+let _callInterval   = 3;  // seconds between calls (from server)
+let _calledNumbers  = []; // full array kept in sync by poll
+let _callTicker     = null;
+
+function _startCallTicker() {
+  if (_callTicker) clearInterval(_callTicker);
+  _callTicker = setInterval(_tickCallDisplay, 100);
+}
+function _stopCallTicker() {
+  if (_callTicker) { clearInterval(_callTicker); _callTicker = null; }
+}
+function _tickCallDisplay() {
+  if (!_gameStartedAt || !_calledNumbers.length) return;
+  const serverNow  = (Date.now() + _clockOffset) / 1000; // estimate of current server time
+  const elapsed    = serverNow - _gameStartedAt;
+  const idx        = Math.min(Math.floor(elapsed / _callInterval), _calledNumbers.length - 1);
+  if (idx < 0) return;
+  const el = document.getElementById('current-call-num');
+  if (!el) return;
+  const num = _calledNumbers[idx];
+  if (el.dataset.idx !== String(idx)) {
+    el.dataset.idx = idx;
+    el.textContent = num;
+    el.classList.remove('num-pop');
+    void el.offsetWidth;
+    el.classList.add('num-pop');
+    document.getElementById('called-count').textContent = idx + 1;
+    renderCalledBubbles(_calledNumbers.slice(0, idx + 1));
+  }
+}
 
 function buildNumGrid(taken = []) {
   _lastTakenNumbers = taken;
@@ -2064,6 +2096,7 @@ async function pollGame() {
       document.getElementById('game-room-label').textContent = gm.id;
       if (gm.status === 'waiting') {
         _stopCountdownTick();
+        _stopCallTicker();
         _countdownStarted = false; _gameIsActive = false;
         document.getElementById('countdown-display').textContent = formatTime(30);
         document.getElementById('waiting-status-msg').textContent = '⏳ Waiting for another player to join…';
@@ -2088,19 +2121,17 @@ async function pollGame() {
       const called = gm.called_numbers || [];
       document.getElementById('called-count').textContent = called.length;
       document.getElementById('active-player-count').textContent = gm.player_count + ' players';
+      // Sync clock offset and store numbers — ticker handles display
+      if (gm.server_time) {
+        _clockOffset = gm.server_time * 1000 - Date.now(); // ms
+      }
       if (called.length > 0) {
-        const el = document.getElementById('current-call-num');
-        const latest = called[called.length-1];
-        if (called.length !== S.prevCalledLen) {
-          // New number called — animate it
-          el.textContent = latest;
-          el.classList.remove('num-pop');
-          void el.offsetWidth; // force reflow to restart animation
-          el.classList.add('num-pop');
-        }
+        _calledNumbers  = called;
+        _gameStartedAt  = gm.started_at || 0;
+        _callInterval   = gm.call_interval || 3;
+        if (!_callTicker) _startCallTicker();
       }
       S.prevCalledLen = called.length;
-      renderCalledBubbles(called);
       // No card highlight — player marks manually
     }
   } catch (e) {
@@ -2269,6 +2300,8 @@ function showResult(won, balance, winnerName, kicked=false, forfeited=false, for
   if (replayBtns) replayBtns.style.display = S.lastCard ? 'block' : 'none';
   showScreen('screen-result');
   _stopCountdownTick();
+  _stopCallTicker();
+  _calledNumbers=[]; _gameStartedAt=0;
   S.currentGameId=null; S.myCard=null; S.myCard2=null; S.dualCard=false; _countdownStarted=false;
   startLobbyPolling();
 }
@@ -2352,6 +2385,7 @@ async function doLeave(confirmed) {
   if (!confirmed) return;
   clearTimeout(S.gamePolling);
   _stopCountdownTick();
+  _stopCallTicker();
   const gid = S.currentGameId;
   S.gamePolling=null;
   // Tell server the player is leaving
