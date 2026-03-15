@@ -458,7 +458,7 @@ body::before {
   transition:all .15s; user-select:none;
 }
 .num-cell:hover   { background:var(--surface3); border-color:var(--gold3); color:var(--gold); }
-.num-cell.taken   { background:rgba(245,78,78,.1); border-color:rgba(245,78,78,.3); color:var(--red); cursor:not-allowed; opacity:.7; }
+.num-cell.taken   { background:rgba(245,78,78,.15); border-color:rgba(245,78,78,.5); color:var(--red); cursor:not-allowed; opacity:.8; transition:background .2s,border-color .2s; }
 .num-cell.chosen  { background:linear-gradient(135deg,var(--gold),var(--gold2)); border-color:var(--gold); color:#000; transform:scale(1.12); box-shadow:var(--glow-gold); }
 .num-cell.chosen2 { background:linear-gradient(135deg,#00c853,#1de9b6); border-color:var(--green); color:#000; transform:scale(1.12); box-shadow:0 0 10px rgba(0,200,83,.55); }
 
@@ -1766,6 +1766,14 @@ async function _pollPickerGame() {
   try {
     const gm = await api('GET', '/api/games/' + S.currentGameId);
     _updatePickerBar(gm);
+    // Update taken numbers on the grid in real time
+    const taken = (gm.players || [])
+      .flatMap(p => [p.picked_number, p.picked_number2])
+      .filter(Boolean);
+    if (taken.length !== _lastTakenNumbers.length ||
+        taken.some(n => !_lastTakenNumbers.includes(n))) {
+      buildNumGrid(taken);  // surgical — only changed cells update
+    }
   } catch(_) {}
 }
 
@@ -1857,6 +1865,31 @@ function _tickCallDisplay() {
 function buildNumGrid(taken = []) {
   _lastTakenNumbers = taken;
   const grid = document.getElementById('num-grid');
+  // Surgical update: if grid already has 100 cells just update classes
+  const existing = grid.querySelectorAll('.num-cell');
+  if (existing.length === 100) {
+    existing.forEach(div => {
+      const i = parseInt(div.dataset.num);
+      const isTaken = taken.includes(i);
+      const isCard1 = S.pickedNumber === i;
+      const isCard2 = S.dualCard && S.pickedNumber2 === i;
+      // Only update if something changed
+      const wasTaken = div.classList.contains('taken');
+      if (!wasTaken && isTaken) {
+        // Newly taken — flash red instantly
+        div.className = 'num-cell taken';
+        div.onclick = null;
+      } else if (!isTaken) {
+        let cls = 'num-cell';
+        if (isCard1) cls += ' chosen';
+        if (isCard2) cls += ' chosen2';
+        if (div.className !== cls) div.className = cls;
+        if (!div.onclick) div.onclick = () => pickNumber(i, div);
+      }
+    });
+    return;
+  }
+  // Full build (first render)
   grid.innerHTML = '';
   for (let i = 1; i <= 100; i++) {
     const isTaken = taken.includes(i);
@@ -1999,6 +2032,13 @@ function renderCardPreview(card, pickedNum) {
 
 async function proceedToGame() {
   try {
+    // Instantly mark own number(s) red so picker looks right if we come back
+    if (S.pickedNumber) {
+      const nowTaken = [..._lastTakenNumbers];
+      if (!nowTaken.includes(S.pickedNumber)) nowTaken.push(S.pickedNumber);
+      if (S.dualCard && S.pickedNumber2 && !nowTaken.includes(S.pickedNumber2)) nowTaken.push(S.pickedNumber2);
+      buildNumGrid(nowTaken);
+    }
     const body = {
       picked_number: S.pickedNumber,
       dual_card:     S.dualCard,
