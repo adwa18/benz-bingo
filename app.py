@@ -85,7 +85,6 @@ ADMIN_TG_IDS     = set(ADMIN_TG_IDS_STR.split(',')) if ADMIN_TG_IDS_STR else set
 ADMIN_TG_IDS_INT = {int(x) for x in ADMIN_TG_IDS if x.strip().isdigit()}
 WELCOME_BONUS       = int(os.environ.get('WELCOME_BONUS', 10))
 INTERNAL_SECRET     = os.environ.get('INTERNAL_SECRET', 'changeme-please')
-WEBHOOK_SECRET      = os.environ.get('WEBHOOK_SECRET', INTERNAL_SECRET)  # Telegram sends this in X-Telegram-Bot-Api-Secret-Token
 HOUSE_CUT           = 0.10
 COUNTDOWN_SECS      = 30
 CALL_INTERVAL       = 3
@@ -137,12 +136,6 @@ else:
 
 # Pool is created lazily on first DB call — keeps Gunicorn from blocking at import
 _pg_pool = None
-
-# Shared bot objects — set by start_bot_thread, used by Flask webhook route
-_bot_instance  = None   # aiogram Bot
-_dp_instance   = None   # aiogram Dispatcher
-_bot_loop      = None   # the event loop the bot runs in
-_pre_ready_q   = []     # updates that arrived before bot was ready
 _pg_pool_lock = __import__('threading').Lock()
 
 def _ensure_pool():
@@ -1461,45 +1454,6 @@ def webapp_withdraw_request():
             _notify_queue.put({'tg_id': aid, 'event': 'custom', 'data': {'message': admin_txt}})
     return jsonify({'status': 'submitted'})
 
-def _drain_pre_ready_q():
-    """Feed any updates that arrived before the bot finished starting up."""
-    while _pre_ready_q and _dp_instance and _bot_instance and _bot_loop:
-        upd = _pre_ready_q.pop(0)
-        try:
-            future = asyncio.run_coroutine_threadsafe(
-                _dp_instance.feed_raw_update(_bot_instance, upd), _bot_loop
-            )
-            future.result(timeout=10)
-        except Exception as exc:
-            logger.warning(f'[Webhook] pre-ready drain error: {exc}')
-
-@app.route('/webhook/telegram', methods=['POST'])
-def telegram_webhook():
-    """Receive Telegram updates via webhook and feed to aiogram dispatcher."""
-    # Verify secret token Telegram sends in header
-    secret = request.headers.get('X-Telegram-Bot-Api-Secret-Token', '')
-    if secret != WEBHOOK_SECRET:
-        return jsonify({'error': 'Forbidden'}), 403
-    update_data = request.get_json(force=True, silent=True)
-    if not update_data:
-        return '', 200
-    if _dp_instance is None or _bot_instance is None or _bot_loop is None:
-        # Bot not ready yet — queue update, always return 200 so Telegram stops retrying
-        _pre_ready_q.append(update_data)
-        logger.info(f'[Webhook] Bot not ready — queued update (queue size: {len(_pre_ready_q)})')
-        return '', 200
-    # Feed update to aiogram from Flask thread — thread-safe via run_coroutine_threadsafe
-    _drain_pre_ready_q()  # flush any queued pre-ready updates first
-    future = asyncio.run_coroutine_threadsafe(
-        _dp_instance.feed_raw_update(_bot_instance, update_data),
-        _bot_loop
-    )
-    try:
-        future.result(timeout=10)
-    except Exception as exc:
-        logger.warning(f'[Webhook] handler error: {exc}')
-    return '', 200
-
 @app.route('/health')
 def health():
     return jsonify({'status': 'ok', 'db': DB_TYPE})
@@ -2387,7 +2341,7 @@ async def _session_middleware(handler, event, data):
 
 # ── Bot main coroutine ────────────────────────────────────────────────────────
 async def _bot_main():
-    global _bot_username, _bot_instance, _dp_instance, _bot_loop
+    global _bot_username
     if not BOT_TOKEN:
         logger.warning('[Bot] No BOT_TOKEN set — bot will not start.')
         return
@@ -2402,45 +2356,28 @@ async def _bot_main():
     # Cache bot username
     me = await bot.get_me()
     _bot_username = me.username
+    logger.info(f'[Bot] @{_bot_username} started (polling)')
 
-    # Expose bot/dp/loop to Flask webhook route
-    _bot_instance = bot
-    _dp_instance  = dp
-    _bot_loop     = asyncio.get_running_loop()  # correct inside running coroutine
+    # Delete any stale webhook so polling works
+    await bot.delete_webhook(drop_pending_updates=True)
 
-    # Register webhook with Telegram
-    port    = int(os.environ.get('PORT', 5000))
-    base    = os.environ.get('WEBAPP_URL', f'http://localhost:{port}').rstrip('/')
-    wh_url  = f'{base}/webhook/telegram'
-    await bot.set_webhook(
-        url=wh_url,
-        secret_token=WEBHOOK_SECRET,
-        drop_pending_updates=True,
-        allowed_updates=dp.resolve_used_update_types(),
-    )
-    logger.info(f'[Bot] @{_bot_username} webhook set → {wh_url}')
-
-    # Drain any updates that arrived before bot was ready
-    if _pre_ready_q:
-        logger.info(f'[Bot] Draining {len(_pre_ready_q)} pre-ready queued update(s)')
-        for upd in list(_pre_ready_q):
-            _pre_ready_q.remove(upd)
-            try:
-                await dp.feed_raw_update(bot, upd)
-            except Exception as exc:
-                logger.warning(f'[Bot] pre-ready drain: {exc}')
+    # Brief pause so any previous instance (from a rolling redeploy) has time
+    # to release its getUpdates session before we start polling.
+    await asyncio.sleep(3)
 
     # Start notification drain as background task
     asyncio.create_task(_drain_notify_queue(bot))
 
-    # Keep the event loop alive — webhook updates arrive via Flask route
     try:
-        while True:
-            await asyncio.sleep(3600)  # heartbeat — loop stays alive indefinitely
+        await dp.start_polling(
+            bot,
+            allowed_updates=dp.resolve_used_update_types(),
+            close_bot_session=True,
+            handle_signals=False,   # ← required when running in a non-main thread
+        )
     finally:
-        await bot.delete_webhook()
         await bot.session.close()
-        logger.info('[Bot] Webhook deleted, session closed.')
+        logger.info('[Bot] Polling stopped.')
 
 # ── Thread launcher (called once at module load) ──────────────────────────────
 _bot_thread_started = False
