@@ -139,9 +139,10 @@ else:
 _pg_pool = None
 
 # Shared bot objects — set by start_bot_thread, used by Flask webhook route
-_bot_instance = None   # aiogram Bot
-_dp_instance  = None   # aiogram Dispatcher
-_bot_loop     = None   # the event loop the bot runs in
+_bot_instance  = None   # aiogram Bot
+_dp_instance   = None   # aiogram Dispatcher
+_bot_loop      = None   # the event loop the bot runs in
+_pre_ready_q   = []     # updates that arrived before bot was ready
 _pg_pool_lock = __import__('threading').Lock()
 
 def _ensure_pool():
@@ -1460,6 +1461,18 @@ def webapp_withdraw_request():
             _notify_queue.put({'tg_id': aid, 'event': 'custom', 'data': {'message': admin_txt}})
     return jsonify({'status': 'submitted'})
 
+def _drain_pre_ready_q():
+    """Feed any updates that arrived before the bot finished starting up."""
+    while _pre_ready_q and _dp_instance and _bot_instance and _bot_loop:
+        upd = _pre_ready_q.pop(0)
+        try:
+            future = asyncio.run_coroutine_threadsafe(
+                _dp_instance.feed_raw_update(_bot_instance, upd), _bot_loop
+            )
+            future.result(timeout=10)
+        except Exception as exc:
+            logger.warning(f'[Webhook] pre-ready drain error: {exc}')
+
 @app.route('/webhook/telegram', methods=['POST'])
 def telegram_webhook():
     """Receive Telegram updates via webhook and feed to aiogram dispatcher."""
@@ -1467,18 +1480,22 @@ def telegram_webhook():
     secret = request.headers.get('X-Telegram-Bot-Api-Secret-Token', '')
     if secret != WEBHOOK_SECRET:
         return jsonify({'error': 'Forbidden'}), 403
-    if _dp_instance is None or _bot_instance is None or _bot_loop is None:
-        return jsonify({'error': 'Bot not ready'}), 503
     update_data = request.get_json(force=True, silent=True)
     if not update_data:
         return '', 200
+    if _dp_instance is None or _bot_instance is None or _bot_loop is None:
+        # Bot not ready yet — queue update, always return 200 so Telegram stops retrying
+        _pre_ready_q.append(update_data)
+        logger.info(f'[Webhook] Bot not ready — queued update (queue size: {len(_pre_ready_q)})')
+        return '', 200
     # Feed update to aiogram from Flask thread — thread-safe via run_coroutine_threadsafe
+    _drain_pre_ready_q()  # flush any queued pre-ready updates first
     future = asyncio.run_coroutine_threadsafe(
         _dp_instance.feed_raw_update(_bot_instance, update_data),
         _bot_loop
     )
     try:
-        future.result(timeout=10)  # wait up to 10s for handler to complete
+        future.result(timeout=10)
     except Exception as exc:
         logger.warning(f'[Webhook] handler error: {exc}')
     return '', 200
