@@ -2406,7 +2406,7 @@ async def _bot_main():
     # Expose bot/dp/loop to Flask webhook route
     _bot_instance = bot
     _dp_instance  = dp
-    _bot_loop     = asyncio.get_event_loop()
+    _bot_loop     = asyncio.get_running_loop()  # correct inside running coroutine
 
     # Register webhook with Telegram
     port    = int(os.environ.get('PORT', 5000))
@@ -2419,6 +2419,16 @@ async def _bot_main():
         allowed_updates=dp.resolve_used_update_types(),
     )
     logger.info(f'[Bot] @{_bot_username} webhook set → {wh_url}')
+
+    # Drain any updates that arrived before bot was ready
+    if _pre_ready_q:
+        logger.info(f'[Bot] Draining {len(_pre_ready_q)} pre-ready queued update(s)')
+        for upd in list(_pre_ready_q):
+            _pre_ready_q.remove(upd)
+            try:
+                await dp.feed_raw_update(bot, upd)
+            except Exception as exc:
+                logger.warning(f'[Bot] pre-ready drain: {exc}')
 
     # Start notification drain as background task
     asyncio.create_task(_drain_notify_queue(bot))
