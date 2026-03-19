@@ -78,6 +78,7 @@ body::before {
   display:flex;
   flex-direction:column;
   overflow:hidden;
+  padding-bottom:0;
 }
 
 /* ══ HEADER ═════════════════════════════════════════════ */
@@ -153,8 +154,9 @@ body::before {
   align-items:center;
   justify-content:space-around;
   flex-shrink:0;
-  position:relative;
-  z-index:100;
+  position:fixed;
+  bottom:0; left:0; right:0;
+  z-index:200;
 }
 #bottom-nav::before {
   content:'';
@@ -1264,8 +1266,11 @@ body::before {
     <!-- CARD PREVIEW -->
     <div class="screen" id="screen-card-preview">
       <div class="screen-title" id="preview-title">◈ YOUR CARD</div>
+      <!-- Side-by-side for dual, full width for single -->
       <div id="preview-cards-wrap" style="display:flex;gap:8px;align-items:flex-start">
-                  <div id="preview-card1-label" style="display:none;font-size:10px;font-weight:700;color:var(--cyan);text-align:center;margin-bottom:4px;letter-spacing:1px">CARD 1</div>
+        <!-- Card 1 -->
+        <div style="flex:1;min-width:0">
+          <div id="preview-card1-label" style="display:none;font-size:10px;font-weight:700;color:var(--cyan);text-align:center;margin-bottom:4px;letter-spacing:1px">CARD 1</div>
           <div class="panel panel-cyan fade-in" style="margin-bottom:8px;padding:10px">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
               <div style="font-size:11px;color:var(--text3)">Lucky: <span class="mono" id="preview-lucky" style="color:var(--cyan)">—</span></div>
@@ -1275,7 +1280,7 @@ body::before {
           </div>
         </div>
         <!-- Card 2 (dual mode) -->
-        <div id="preview-card2-wrap" style="flex:1;min-width:0;display:none" style="display:none">
+        <div id="preview-card2-wrap" style="flex:1;min-width:0;display:none">
           <div style="font-size:10px;font-weight:700;color:var(--pink);text-align:center;margin-bottom:4px;letter-spacing:1px">CARD 2</div>
           <div class="panel panel-pink fade-in" style="margin-bottom:8px;padding:10px">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
@@ -1286,6 +1291,7 @@ body::before {
           </div>
         </div>
       </div>
+      <!-- Proceed panel -->
       <div class="panel">
         <div style="font-size:12px;color:var(--text2);margin-bottom:12px" id="preview-proceed-msg">
           Happy with your card? Proceed to enter the game.
