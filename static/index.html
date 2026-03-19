@@ -555,11 +555,12 @@ body::before {
   aspect-ratio:1;
   display:flex; align-items:center; justify-content:center;
   background:var(--surf2);
-  border:1px solid var(--border);
+  border:1px solid var(--border2);
   border-radius:6px;
   font-family:'Share Tech Mono',monospace;
-  font-size:11px;
-  color:var(--text2);
+  font-size:clamp(11px,2.8vw,14px);
+  font-weight:700;
+  color:var(--text);
   cursor:pointer;
   transition:all .15s;
   -webkit-tap-highlight-color:transparent;
@@ -622,14 +623,6 @@ body::before {
   width:18px;height:18px;border-radius:50%;background:#555;
   position:absolute;top:1px;left:1px;transition:all .25s;
 }
-/* Dual cards layout */
-.cards-area.dual {
-  display:flex;
-  flex-direction:row;
-  gap:6px;
-}
-.cards-area.dual .card-slot { flex:1; min-width:0; display:flex; flex-direction:column; }
-.card-slot-divider { width:1px; background:var(--border2); flex-shrink:0; }
 #bingo-claim-btn2 { display:none; animation:bingo-glow .6s ease infinite alternate; }
 
 .chosen-panel {
@@ -738,25 +731,30 @@ body::before {
 }
 
 /* Cards area */
-.cards-area {
-  flex:1;
+#cards-area {
+  flex:1 1 0; min-height:0;
+  display:flex; gap:6px; align-items:stretch;
   overflow:hidden;
-  display:flex;
-  flex-direction:column;
-  padding:10px 12px 8px;
-  gap:8px;
 }
-.card-header {
-  display:flex; align-items:center; justify-content:space-between;
-  margin-bottom:6px; flex-shrink:0;
+.card-slot { flex:1; min-width:0; display:flex; flex-direction:column; gap:3px; }
+.card-header { display:flex; align-items:center; justify-content:space-between; flex-shrink:0; padding:0 2px; }
+.card-label { font-family:'Audiowide',sans-serif; font-size:11px; font-weight:700; color:var(--cyan); letter-spacing:.8px; }
+.bingo-card-grid.game-card {
+  max-width:none; margin:0;
+  flex:1; min-height:0; max-height:100%;
+  display:grid !important;
+  grid-template-columns:repeat(5,1fr);
+  grid-template-rows:auto repeat(5,1fr);
+  overflow:hidden;
 }
-.card-label {
-  font-family:'Audiowide',sans-serif;
-  font-size:11px;
-  color:var(--text3);
-  letter-spacing:.8px;
-}
-.bingo-grid-wrap { flex:1; overflow:hidden; }
+.bingo-card-grid.game-card .bc-header { font-size:clamp(10px,3vw,14px); padding:2px; white-space:nowrap; }
+.bingo-card-grid.game-card .bc-cell   { aspect-ratio:unset; overflow:hidden; min-height:0; min-width:0; font-size:clamp(10px,2.8vw,14px); padding:1px; }
+#cards-area.single .bingo-card-grid.game-card .bc-cell   { font-size:clamp(11px,3.2vw,15px); }
+#cards-area.single .bingo-card-grid.game-card .bc-header { font-size:clamp(12px,3.8vw,17px); }
+#cards-area:not(.single) .bingo-card-grid.game-card .bc-header { font-size:clamp(10px,3.2vw,15px); }
+#cards-area:not(.single) .bingo-card-grid.game-card .bc-cell   { font-size:clamp(9px,2.8vw,13px); }
+#card2-area { border-left:2px solid var(--pink2); padding-left:5px; }
+.game-bottom { flex:1 1 0; overflow:hidden; padding:6px 10px 4px; display:flex; flex-direction:column; gap:4px; min-height:0; }
 
 /* Bingo card */
 .bingo-card-grid {
@@ -767,27 +765,29 @@ body::before {
 }
 .bc-header {
   background:var(--surf3);
-  border:1px solid var(--border2);
+  border:1px solid var(--cyan3);
   border-radius:5px;
   display:flex; align-items:center; justify-content:center;
   font-family:'Audiowide',sans-serif;
-  font-size:clamp(10px,2.8vw,14px);
-  font-weight:400;
+  font-size:clamp(11px,2.8vw,14px);
+  font-weight:700;
   color:var(--cyan);
+  text-shadow:0 0 8px rgba(0,229,255,.4);
   aspect-ratio:1;
 }
 .bc-cell {
   background:var(--surf2);
-  border:1px solid var(--border);
+  border:1px solid var(--border2);
   border-radius:5px;
   display:flex; align-items:center; justify-content:center;
   font-family:'Share Tech Mono',monospace;
-  font-size:clamp(10px,2.8vw,14px);
+  font-size:clamp(11px,2.8vw,15px);
+  font-weight:700;
   cursor:pointer;
   transition:background .12s, border-color .12s, color .12s;
   -webkit-tap-highlight-color:transparent;
   aspect-ratio:1;
-  color:var(--text2);
+  color:var(--text);
   user-select:none;
 }
 .bc-cell:hover { border-color:var(--border2); color:var(--text); }
@@ -929,7 +929,7 @@ body::before {
   font-family:'Share Tech Mono',monospace;
   font-size:14px;
   color:var(--text3);
-  width:28px;
+  width:36px;
   flex-shrink:0;
   text-align:center;
 }
@@ -992,7 +992,7 @@ body::before {
 }
 .stat-box {
   background:var(--surf2);
-  border:1px solid var(--border);
+  border:1px solid var(--border2);
   border-radius:10px;
   padding:12px;
   text-align:center;
@@ -1001,7 +1001,7 @@ body::before {
   font-family:'Share Tech Mono',monospace;
   font-size:22px;
   color:var(--cyan);
-  text-shadow:0 0 12px rgba(0,229,255,.3);
+  text-shadow:var(--glow-c);
 }
 .stat-lbl { font-size:10px; color:var(--text3); letter-spacing:.8px; text-transform:uppercase; margin-top:3px; }
 
@@ -1264,25 +1264,25 @@ body::before {
     <!-- CARD PREVIEW -->
     <div class="screen" id="screen-card-preview">
       <div class="screen-title" id="preview-title">◈ YOUR CARD</div>
-      <div style="display:flex;gap:8px;align-items:flex-start" id="preview-cards-wrap">
-        <div style="flex:1;min-width:0">
-          <div id="preview-card1-label" style="display:none;font-size:10px;font-weight:700;color:var(--cyan);text-align:center;margin-bottom:4px;letter-spacing:1px">CARD 1</div>
+      <div id="preview-cards-wrap" style="display:flex;gap:8px;align-items:flex-start">
+                  <div id="preview-card1-label" style="display:none;font-size:10px;font-weight:700;color:var(--cyan);text-align:center;margin-bottom:4px;letter-spacing:1px">CARD 1</div>
           <div class="panel panel-cyan fade-in" style="margin-bottom:8px;padding:10px">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
               <div style="font-size:11px;color:var(--text3)">Lucky: <span class="mono" id="preview-lucky" style="color:var(--cyan)">—</span></div>
               <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:4px 8px" onclick="changePreviewNum(1)">🔄 Change</button>
             </div>
-            <div class="bingo-card-grid" id="preview-card-grid" style="height:clamp(180px,45vw,260px)"></div>
+            <div class="bingo-card-grid" id="preview-card-grid"></div>
           </div>
         </div>
-        <div id="preview-card2-wrap" style="flex:1;min-width:0;display:none">
+        <!-- Card 2 (dual mode) -->
+        <div id="preview-card2-wrap" style="flex:1;min-width:0;display:none" style="display:none">
           <div style="font-size:10px;font-weight:700;color:var(--pink);text-align:center;margin-bottom:4px;letter-spacing:1px">CARD 2</div>
           <div class="panel panel-pink fade-in" style="margin-bottom:8px;padding:10px">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
               <div style="font-size:11px;color:var(--text3)">Lucky: <span class="mono" id="preview-lucky2" style="color:var(--pink)">—</span></div>
               <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:4px 8px" onclick="changePreviewNum(2)">🔄 Change</button>
             </div>
-            <div class="bingo-card-grid" id="preview-card2-grid" style="height:clamp(180px,45vw,260px)"></div>
+            <div class="bingo-card-grid" id="preview-card2-grid"></div>
           </div>
         </div>
       </div>
@@ -1330,35 +1330,27 @@ body::before {
         </div>
       </div>
 
-      <!-- Card area -->
-      <div class="cards-area" id="cards-area">
-        <!-- Card 1 -->
-        <div class="card-slot" id="card1-slot" style="flex:1;min-width:0;display:flex;flex-direction:column">
-          <div class="card-header">
-            <div class="card-label" id="game-card-title-label">MY BINGO CARD</div>
-            <button class="btn btn-green btn-sm" id="bingo-claim-btn" onclick="doClaim(1)">🎉 BINGO!</button>
+      <div class="game-bottom">
+        <div id="cards-area" class="single">
+          <div class="card-slot" id="card1-slot">
+            <div class="card-header">
+              <div class="card-label" id="game-card-title-label">MY BINGO CARD</div>
+              <button class="btn btn-green btn-sm" id="bingo-claim-btn" onclick="doClaim(1)">🎉 BINGO!</button>
+            </div>
+            <div class="bingo-card-grid game-card" id="game-card-grid"></div>
           </div>
-          <div class="bingo-grid-wrap" style="flex:1">
-            <div class="bingo-card-grid" id="game-card-grid"></div>
-          </div>
-        </div>
-        <!-- Card 2 (dual mode) -->
-        <div class="card-slot-divider" id="card-divider" style="display:none"></div>
-        <div class="card-slot" id="card2-area" style="flex:1;min-width:0;display:none;flex-direction:column">
-          <div class="card-header">
-            <div class="card-label" style="color:var(--pink)">CARD 2</div>
-            <button class="btn btn-green btn-sm" id="bingo-claim-btn2" onclick="doClaim(2)">🎉 BINGO!</button>
-          </div>
-          <div class="bingo-grid-wrap" style="flex:1">
-            <div class="bingo-card-grid" id="game-card2-grid"></div>
+          <div class="card-slot" id="card2-area" style="display:none">
+            <div class="card-header">
+              <div class="card-label" style="color:var(--pink)">CARD 2</div>
+              <button class="btn btn-green btn-sm" id="bingo-claim-btn2" onclick="doClaim(2)">🎉 BINGO!</button>
+            </div>
+            <div class="bingo-card-grid game-card" id="game-card2-grid"></div>
           </div>
         </div>
-      </div>
-
-      <!-- Footer -->
-      <div class="game-footer">
-        <div style="font-size:10px;color:var(--text3)">Room: <span id="game-room-footer" style="font-family:'Share Tech Mono',monospace;color:var(--cyan)"></span></div>
-        <button class="btn btn-danger btn-sm" id="leave-btn" onclick="confirmLeave()">Leave Game</button>
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-shrink:0;padding:2px 2px 0">
+          <div style="font-size:10px;color:var(--text3)">Room: <span id="game-room-footer" class="mono" style="color:var(--cyan)"></span></div>
+          <button class="btn btn-danger btn-sm" id="leave-btn" onclick="confirmLeave()">Leave Game</button>
+        </div>
       </div>
     </div>
 
@@ -2168,9 +2160,19 @@ async function proceedToGame() {
 /* ── GAME SCREEN ── */
 function startGameScreen() {
   S.prevCalledLen = 0;
-  const cb = document.getElementById('bingo-claim-btn');
-  if (cb) cb.style.display = 'inline-flex';
+  const ca=document.getElementById('cards-area'), c2=document.getElementById('card2-area');
+  const tl=document.getElementById('game-card-title-label');
+  const cb=document.getElementById('bingo-claim-btn'), cb2=document.getElementById('bingo-claim-btn2');
+  if (S.myCard2) {
+    if(ca)ca.classList.remove('single'); if(c2)c2.style.display='flex';
+    if(tl)tl.textContent='CARD 1'; if(cb2)cb2.style.display='inline-flex';
+  } else {
+    if(ca)ca.classList.add('single'); if(c2)c2.style.display='none';
+    if(tl)tl.textContent='MY BINGO CARD'; if(cb2)cb2.style.display='none';
+  }
+  if(cb)cb.style.display='inline-flex';
   renderGameCard();
+  if(S.myCard2) renderGameCard2();
   pollGame();
   function _scheduleGamePoll() {
     const interval = _gameIsActive ? 2000 : 3000;
@@ -2190,10 +2192,10 @@ async function pollGame() {
       if (!S.myCard && gm.my_player.card) { S.myCard=gm.my_player.card; renderGameCard(); }
       if (!S.myCard2 && gm.my_player.card2) {
         S.myCard2=gm.my_player.card2; S.dualCard=true;
-        const ca=document.getElementById('cards-area'),c2=document.getElementById('card2-area'),dv=document.getElementById('card-divider');
+        const ca=document.getElementById('cards-area'),c2=document.getElementById('card2-area');
         const cb2=document.getElementById('bingo-claim-btn2'),tl=document.getElementById('game-card-title-label');
-        if(ca)ca.classList.add('dual');if(c2)c2.style.display='flex';if(dv)dv.style.display='block';
-        if(cb2)cb2.style.display='inline-flex';if(tl)tl.textContent='CARD 1';
+        if(ca)ca.classList.remove('single'); if(c2)c2.style.display='flex';
+        if(cb2)cb2.style.display='inline-flex'; if(tl)tl.textContent='CARD 1';
         renderGameCard2();
       }
       S.myMarked  = gm.my_player.marked_cells || [[2,2]];
@@ -2782,18 +2784,33 @@ function applyTheme(light, save) {
   const knob = document.getElementById('theme-knob');
   const tog  = document.getElementById('theme-toggle');
   if (light) {
-    document.documentElement.style.setProperty('--bg',    '#f0f2fa');
-    document.documentElement.style.setProperty('--bg2',   '#e8eaf6');
-    document.documentElement.style.setProperty('--surf',  '#ffffff');
-    document.documentElement.style.setProperty('--surf2', '#f5f6fc');
-    document.documentElement.style.setProperty('--surf3', '#eceef8');
-    document.documentElement.style.setProperty('--border','#dde0f0');
-    document.documentElement.style.setProperty('--border2','#c8cce8');
-    document.documentElement.style.setProperty('--text',  '#1a1a2e');
-    document.documentElement.style.setProperty('--text2', '#4a4a7a');
-    document.documentElement.style.setProperty('--text3', '#8888b0');
-    if (knob) knob.style.cssText='width:18px;height:18px;border-radius:50%;background:var(--cyan);position:absolute;top:1px;left:23px;transition:all .25s;box-shadow:var(--glow-c)';
-    if (tog)  tog.style.background='rgba(0,229,255,.15)';
+    document.documentElement.style.setProperty('--bg',     '#eef0f7');
+    document.documentElement.style.setProperty('--bg2',    '#e4e6f2');
+    document.documentElement.style.setProperty('--surf',   '#f8f9ff');
+    document.documentElement.style.setProperty('--surf2',  '#eef0f8');
+    document.documentElement.style.setProperty('--surf3',  '#e4e6f2');
+    document.documentElement.style.setProperty('--border', '#c8ccdd');
+    document.documentElement.style.setProperty('--border2','#aab0cc');
+    document.documentElement.style.setProperty('--text',   '#0d0e1a');
+    document.documentElement.style.setProperty('--text2',  '#2a2d4a');
+    document.documentElement.style.setProperty('--text3',  '#5a5f80');
+    // Deeper accent tones that stay readable on light backgrounds
+    document.documentElement.style.setProperty('--cyan',   '#006fa8');
+    document.documentElement.style.setProperty('--cyan2',  '#005a8a');
+    document.documentElement.style.setProperty('--cyan3',  '#004d75');
+    document.documentElement.style.setProperty('--pink',   '#b8004a');
+    document.documentElement.style.setProperty('--pink2',  '#8a0038');
+    document.documentElement.style.setProperty('--amber',  '#8a5800');
+    document.documentElement.style.setProperty('--amber2', '#6e4600');
+    document.documentElement.style.setProperty('--green',  '#007a35');
+    document.documentElement.style.setProperty('--green2', '#006028');
+    document.documentElement.style.setProperty('--red',    '#c0002a');
+    document.documentElement.style.setProperty('--glow-c', '0 0 8px rgba(0,111,168,.25)');
+    document.documentElement.style.setProperty('--glow-p', '0 0 8px rgba(184,0,74,.25)');
+    document.documentElement.style.setProperty('--glow-a', '0 0 8px rgba(138,88,0,.25)');
+    document.documentElement.style.setProperty('--glow-g', '0 0 8px rgba(0,122,53,.25)');
+    if (knob) knob.style.cssText='width:18px;height:18px;border-radius:50%;background:#006fa8;position:absolute;top:1px;left:23px;transition:all .25s;';
+    if (tog)  tog.style.background='rgba(0,111,168,.15)';
   } else {
     document.documentElement.style.setProperty('--bg',    '#050508');
     document.documentElement.style.setProperty('--bg2',   '#08080e');
@@ -2805,6 +2822,21 @@ function applyTheme(light, save) {
     document.documentElement.style.setProperty('--text',  '#dde0f5');
     document.documentElement.style.setProperty('--text2', '#8888b0');
     document.documentElement.style.setProperty('--text3', '#50507a');
+    // Restore neon accents
+    document.documentElement.style.setProperty('--cyan',   '#00e5ff');
+    document.documentElement.style.setProperty('--cyan2',  '#00b8d4');
+    document.documentElement.style.setProperty('--cyan3',  '#007d94');
+    document.documentElement.style.setProperty('--pink',   '#ff2d78');
+    document.documentElement.style.setProperty('--pink2',  '#c2195a');
+    document.documentElement.style.setProperty('--amber',  '#ffb300');
+    document.documentElement.style.setProperty('--amber2', '#e6a000');
+    document.documentElement.style.setProperty('--green',  '#00e676');
+    document.documentElement.style.setProperty('--green2', '#00c853');
+    document.documentElement.style.setProperty('--red',    '#ff3d57');
+    document.documentElement.style.setProperty('--glow-c', '0 0 18px rgba(0,229,255,.45), 0 0 40px rgba(0,229,255,.15)');
+    document.documentElement.style.setProperty('--glow-p', '0 0 18px rgba(255,45,120,.45), 0 0 40px rgba(255,45,120,.15)');
+    document.documentElement.style.setProperty('--glow-a', '0 0 18px rgba(255,179,0,.45)');
+    document.documentElement.style.setProperty('--glow-g', '0 0 18px rgba(0,230,118,.45)');
     if (knob) knob.style.cssText='width:18px;height:18px;border-radius:50%;background:var(--text3);position:absolute;top:1px;left:1px;transition:all .25s';
     if (tog)  tog.style.background='var(--surf3)';
   }
