@@ -136,6 +136,8 @@ else:
 
 # Pool is created lazily on first DB call — keeps Gunicorn from blocking at import
 _pg_pool = None
+
+
 _pg_pool_lock = __import__('threading').Lock()
 
 def _ensure_pool():
@@ -1603,11 +1605,14 @@ def kb_bets(balance: int) -> InlineKeyboardMarkup:
 bot_router = Router(name='benz_bingo')
 
 def admin_guard(handler):
+    import inspect as _inspect
     async def _w(message: Message, *a, **kw):
         if message.from_user.id not in ADMIN_TG_IDS_INT:
             await message.answer('⛔ Admin access required.')
             return
-        return await handler(message, *a, **kw)
+        sig      = _inspect.signature(handler)
+        accepted = {k: v for k, v in kw.items() if k in sig.parameters}
+        return await handler(message, *a, **accepted)
     _w.__name__ = handler.__name__
     return _w
 
@@ -2349,23 +2354,17 @@ async def _bot_main():
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp  = Dispatcher(storage=MemoryStorage())
 
-    # Inject aiohttp session into every handler via middleware
     dp.update.middleware(_session_middleware)
     dp.include_router(bot_router)
 
-    # Cache bot username
     me = await bot.get_me()
     _bot_username = me.username
     logger.info(f'[Bot] @{_bot_username} started (polling)')
 
-    # Delete any stale webhook so polling works
+    # Delete any stale webhook before polling
     await bot.delete_webhook(drop_pending_updates=True)
+    await asyncio.sleep(2)
 
-    # Brief pause so any previous instance (from a rolling redeploy) has time
-    # to release its getUpdates session before we start polling.
-    await asyncio.sleep(3)
-
-    # Start notification drain as background task
     asyncio.create_task(_drain_notify_queue(bot))
 
     try:
@@ -2373,7 +2372,7 @@ async def _bot_main():
             bot,
             allowed_updates=dp.resolve_used_update_types(),
             close_bot_session=True,
-            handle_signals=False,   # ← required when running in a non-main thread
+            handle_signals=False,
         )
     finally:
         await bot.session.close()
