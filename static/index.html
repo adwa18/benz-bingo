@@ -659,7 +659,6 @@ body::before {
   border-bottom:1px solid var(--border);
   padding:10px 14px;
   flex-shrink:0;
-  contain:layout style;
 }
 .game-top::after {
   content:'';
@@ -766,20 +765,29 @@ body::before {
   gap:3px;
   width:100%; height:100%;
 }
-/* Preview cards: fixed size, never overflow */
+/* Preview: single card large, dual side-by-side smaller */
 #preview-card-grid, #preview-card2-grid {
-  height:auto;
-  width:100%;
-  max-width:min(52vw, 240px);
+  height:auto; width:100%;
+  max-width:min(84vw, 320px);
   margin:0 auto;
 }
 #preview-card-grid .bc-header, #preview-card2-grid .bc-header,
-#preview-card-grid .bc-cell,   #preview-card2-grid .bc-cell {
+#preview-card-grid .bc-cell, #preview-card2-grid .bc-cell {
   aspect-ratio:1;
-  font-size:clamp(9px,2.5vw,13px);
+  font-size:clamp(10px,3vw,14px);
 }
 #preview-card-grid .bc-cell.free, #preview-card2-grid .bc-cell.free {
-  font-size:clamp(7px,2vw,10px);
+  font-size:clamp(8px,2.2vw,11px);
+}
+#screen-card-preview.dual #preview-card-grid,
+#screen-card-preview.dual #preview-card2-grid {
+  max-width:min(42vw, 200px);
+}
+#screen-card-preview.dual #preview-card-grid .bc-header,
+#screen-card-preview.dual #preview-card2-grid .bc-header,
+#screen-card-preview.dual #preview-card-grid .bc-cell,
+#screen-card-preview.dual #preview-card2-grid .bc-cell {
+  font-size:clamp(8px,2.2vw,11px);
 }
 /* Lucky column highlight in preview — distinct from called-hl */
 .bc-cell.preview-lucky {
@@ -2117,6 +2125,8 @@ function renderPreview() {
   document.getElementById('preview-title').textContent = dual ? '◈ YOUR CARDS' : '◈ YOUR CARD';
   document.getElementById('preview-card1-label').style.display = dual ? 'block' : 'none';
   document.getElementById('preview-card2-wrap').style.display  = dual ? 'flex'  : 'none';
+  const _ps = document.getElementById('screen-card-preview');
+  if (_ps) _ps.classList.toggle('dual', dual);
   document.getElementById('preview-lucky').textContent  = n  || '—';
   const el2 = document.getElementById('preview-lucky2');
   if (el2) el2.textContent = n2 || '—';
