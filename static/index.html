@@ -2,8 +2,9 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <title>Benz Bingo</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Audiowide&family=Share+Tech+Mono&family=Exo+2:wght@300;400;600;700&display=swap" rel="stylesheet">
 <style>
@@ -1717,16 +1718,12 @@ window.addEventListener('DOMContentLoaded', async () => {
   const btn = document.getElementById('btn-welcome');
   if (btn) { btn.textContent = '⏳ Connecting…'; btn.disabled = true; }
 
-  // DEBUG: show tg_id being used
-  toast(`TG ID: ${S.tgUser?.id} | type: ${typeof S.tgUser?.id}`, 'info');
   let authRes = null;
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
       authRes = await api('POST', '/api/auth', { tg_user: S.tgUser });
-      toast(`Auth: ${authRes.status} | id: ${authRes.tg_id || authRes.user?.tg_id}`, 'info');
       break;
     } catch (e) {
-      toast(`Auth err: ${e.message}`, 'error');
       if (attempt < 4) await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
     }
   }
@@ -2910,7 +2907,7 @@ function toast(msg, type='info') {
   el.textContent = msg;
   el.className = 'show ' + type;
   if (_toastTimer) clearTimeout(_toastTimer);
-  _toastTimer = setTimeout(() => { el.classList.remove('show'); }, 8000);
+  _toastTimer = setTimeout(() => { el.classList.remove('show'); }, 3000);
 }
 
 /* ── FORMAT TIME ── */
