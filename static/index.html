@@ -143,7 +143,8 @@ body::before {
   padding:14px 14px calc(var(--nav-h) + 14px);
 }
 .screen.active { display:flex; }
-#screen-game.active { display:flex; flex-direction:column; padding:0; }
+#screen-game { padding:0 !important; }
+#screen-game.active { display:flex !important; flex-direction:column; }
 #screen-welcome.active, #screen-register.active { display:flex; padding:0; }
 #screen-card-preview.active { display:flex; flex-direction:column; overflow-y:auto; }
 
@@ -656,10 +657,14 @@ body::before {
 
 /* ══ SCREEN: GAME ════════════════════════════════════════ */
 .game-top {
+  flex:0 0 auto;
   background:var(--bg2);
   border-bottom:1px solid var(--border);
-  padding:10px 14px;
-  flex-shrink:0;
+  display:flex; flex-direction:column;
+  padding:10px 12px 8px;
+  gap:4px;
+  position:relative;
+  contain:layout style;
 }
 .game-top::after {
   content:'';
@@ -668,8 +673,8 @@ body::before {
   background:linear-gradient(90deg,transparent,var(--cyan3),transparent);
   margin-top:10px;
 }
-.phase { display:none; }
-.phase.active { display:block; }
+.phase { display:none; flex:1; flex-direction:column; }
+.phase.active { display:flex; }
 
 /* Waiting phase */
 .room-id {
@@ -757,7 +762,7 @@ body::before {
 #cards-area:not(.single) .bingo-card-grid.game-card .bc-header { font-size:clamp(10px,3.2vw,15px); }
 #cards-area:not(.single) .bingo-card-grid.game-card .bc-cell   { font-size:clamp(9px,2.8vw,13px); }
 #card2-area { border-left:2px solid var(--pink2); padding-left:5px; }
-.game-bottom { flex:1 1 0; overflow:hidden; padding:6px 10px 4px; display:flex; flex-direction:column; gap:4px; min-height:0; }
+.game-bottom { flex:1 1 0; overflow:hidden; padding:6px 10px calc(var(--nav-h) + 4px); display:flex; flex-direction:column; gap:4px; min-height:0; }
 
 /* Bingo card */
 .bingo-card-grid {
@@ -766,23 +771,25 @@ body::before {
   gap:3px;
   width:100%; height:100%;
 }
-/* Preview: single card large, dual side-by-side smaller */
+/* Preview cards — sized to leave room for Proceed button */
+#screen-card-preview .panel { flex-shrink:0; }  /* prevent panels collapsing in flex column */
 #preview-card-grid, #preview-card2-grid {
   height:auto; width:100%;
-  max-width:min(84vw, 320px);
+  max-width:min(72vw, 270px);  /* single: comfortably fits with proceed visible */
   margin:0 auto;
 }
 #preview-card-grid .bc-header, #preview-card2-grid .bc-header,
 #preview-card-grid .bc-cell, #preview-card2-grid .bc-cell {
   aspect-ratio:1;
-  font-size:clamp(10px,3vw,14px);
+  font-size:clamp(10px,2.8vw,13px);
 }
 #preview-card-grid .bc-cell.free, #preview-card2-grid .bc-cell.free {
-  font-size:clamp(8px,2.2vw,11px);
+  font-size:clamp(7px,2vw,10px);
 }
+/* Dual: equal size side-by-side */
 #screen-card-preview.dual #preview-card-grid,
 #screen-card-preview.dual #preview-card2-grid {
-  max-width:min(42vw, 200px);
+  max-width:min(44vw, 200px);
 }
 #screen-card-preview.dual #preview-card-grid .bc-header,
 #screen-card-preview.dual #preview-card2-grid .bc-header,
@@ -1551,7 +1558,7 @@ body::before {
       </div>
       <!-- Admin section (if admin) -->
       <div id="admin-shortcut" style="display:none">
-        <button class="btn btn-ghost btn-full" onclick="showScreen('screen-admin');setActiveNav(null)">
+        <button class="btn btn-ghost btn-full" onclick="showScreen('screen-admin');setActiveNav(null);loadAdmin()">
           ⚙️ ADMIN PANEL
         </button>
       </div>
@@ -1831,24 +1838,26 @@ function setActiveNav(id) {
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
   if (id) document.getElementById(id)?.classList.add('active');
 }
+let _inGame = false;  // true only while on screen-game
+
 function navToPlay()    {
-  if (S.currentGameId) { toast('Leave or forfeit the game first', 'error'); return; }
+  if (_inGame) { toast('Leave or forfeit the game first', 'error'); return; }
   stopLobbyPolling(); goToLobby(); setActiveNav('nav-play');
 }
 function navToWallet()  {
-  if (S.currentGameId) { toast('Leave or forfeit the game first', 'error'); return; }
+  if (_inGame) { toast('Leave or forfeit the game first', 'error'); return; }
   loadWallet(); showScreen('screen-wallet'); setActiveNav('nav-wallet');
 }
 function navToRanks()   {
-  if (S.currentGameId) { toast('Leave or forfeit the game first', 'error'); return; }
+  if (_inGame) { toast('Leave or forfeit the game first', 'error'); return; }
   loadLeaderboard(); showScreen('screen-leaderboard'); setActiveNav('nav-ranks');
 }
 function navToHistory() {
-  if (S.currentGameId) { toast('Leave or forfeit the game first', 'error'); return; }
+  if (_inGame) { toast('Leave or forfeit the game first', 'error'); return; }
   loadHistory(); showScreen('screen-history'); setActiveNav('nav-history');
 }
 function navToProfile() {
-  if (S.currentGameId) { toast('Leave or forfeit the game first', 'error'); return; }
+  if (_inGame) { toast('Leave or forfeit the game first', 'error'); return; }
   loadProfile(); showScreen('screen-profile'); setActiveNav('nav-profile');
 }
 function goToLobby() {
@@ -2166,7 +2175,7 @@ function renderOnePreviewCard(elId, card, pickedNum) {
     const val=card[r][c]; const div=document.createElement('div');
     const colRange=[[1,15],[16,30],[31,45],[46,60],[61,75]];
     const [lo,hi]=colRange[c]||[0,0];
-    const isLucky = val!=='FREE' && pickedNum>=lo && pickedNum<=hi;
+    const isLucky = val === pickedNum;  // highlight only the exact lucky number cell
     let cls='bc-cell';
     if (val==='FREE') cls+=' free';
     else if (isLucky) cls+=' preview-lucky';
@@ -2216,6 +2225,7 @@ async function proceedToGame() {
 
 /* ── GAME SCREEN ── */
 function startGameScreen() {
+  _inGame = true;
   S.prevCalledLen = 0;
   const ca=document.getElementById('cards-area'), c2=document.getElementById('card2-area');
   const tl=document.getElementById('game-card-title-label');
@@ -2291,6 +2301,7 @@ async function pollGame() {
       _stopCountdownTick(); _gameIsActive = true;
       showPhase('phase-active');
       const called = gm.called_numbers || [];
+      document.getElementById('called-count').textContent = called.length;
       document.getElementById('active-player-count').textContent = gm.player_count + ' players';
       if (gm.server_time) _clockOffset = gm.server_time * 1000 - Date.now();
       if (called.length > 0) {
@@ -2450,7 +2461,7 @@ function showResult(won, balance, winnerName, kicked=false, forfeited=false, for
   _calledNumbers=[]; _gameStartedAt=0;
   S.currentGameId=null; S.myCard=null; S.myCard2=null;
   S.myMarked=[[2,2]]; S.myMarked2=[[2,2]]; S.dualCard=false;
-  _countdownStarted=false; _gameIsActive=false;
+  _countdownStarted=false; _gameIsActive=false; _inGame=false;
   startLobbyPolling();
 }
 
@@ -2569,7 +2580,7 @@ async function doLeave(confirmed) {
       const res = await api('POST', `/api/games/${gid}/leave`, {});
       if (res.refunded) {
         S.currentGameId=null; S.myCard=null; S.myCard2=null;
-        S.myMarked=[[2,2]]; S.myMarked2=[[2,2]]; S.dualCard=false; _countdownStarted=false;
+        S.myMarked=[[2,2]]; S.myMarked2=[[2,2]]; S.dualCard=false; _countdownStarted=false; _inGame=false;
         showScreen('screen-lobby'); setActiveNav('nav-play'); startLobbyPolling();
         return;
       }
@@ -2586,7 +2597,7 @@ async function doLeave(confirmed) {
   }
   S.currentGameId=null; S.myCard=null; S.myCard2=null;
   S.myMarked=[[2,2]]; S.myMarked2=[[2,2]]; S.dualCard=false;
-  _countdownStarted=false; _gameIsActive=false;
+  _countdownStarted=false; _gameIsActive=false; _inGame=false;
   showScreen('screen-lobby'); setActiveNav('nav-play'); startLobbyPolling();
 }
 
