@@ -1711,25 +1711,46 @@ window.addEventListener('DOMContentLoaded', async () => {
   }
   const saved = localStorage.getItem('bb_theme');
   if (saved === 'light') applyTheme(true, false);
-  try {
-    const res = await api('POST', '/api/auth', { tg_user: S.tgUser });
-    if (res.status === 'existing') {
-      S.user = res.user;
-      onLoggedIn();
-      const urlBet = parseInt(new URLSearchParams(location.search).get('bet'));
-      if (urlBet && BET_AMOUNTS.includes(urlBet)) {
-        setTimeout(() => {
-          const card = document.querySelector(`.bet-tile[data-amount="${urlBet}"]`);
-          if (card) selectBet(urlBet, card);
-        }, 200);
-      }
-      return;
-    } else if (res.status === 'new') {
-      const inp = document.getElementById('input-username');
-      if (inp) inp.value = res.suggested_username || '';
-    }
-  } catch (_) {}
+
+  // Show loading dots while attempting auth — retry up to 5x for cold starts
   showScreen('screen-welcome');
+  const btn = document.getElementById('btn-welcome');
+  if (btn) { btn.textContent = '⏳ Connecting…'; btn.disabled = true; }
+
+  // DEBUG: show tg_id being used
+  toast(`TG ID: ${S.tgUser?.id} | type: ${typeof S.tgUser?.id}`, 'info');
+  let authRes = null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      authRes = await api('POST', '/api/auth', { tg_user: S.tgUser });
+      toast(`Auth: ${authRes.status} | id: ${authRes.tg_id || authRes.user?.tg_id}`, 'info');
+      break;
+    } catch (e) {
+      toast(`Auth err: ${e.message}`, 'error');
+      if (attempt < 4) await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
+    }
+  }
+
+  if (btn) { btn.textContent = '◈ ENTER GAME'; btn.disabled = false; }
+
+  if (!authRes) return; // server unreachable — stay on welcome, user can tap manually
+
+  if (authRes.status === 'existing') {
+    S.user = authRes.user;
+    onLoggedIn();
+    const urlBet = parseInt(new URLSearchParams(location.search).get('bet'));
+    if (urlBet && BET_AMOUNTS.includes(urlBet)) {
+      setTimeout(() => {
+        const card = document.querySelector(`.bet-tile[data-amount="${urlBet}"]`);
+        if (card) selectBet(urlBet, card);
+      }, 200);
+    }
+    return;
+  } else if (authRes.status === 'new') {
+    const inp = document.getElementById('input-username');
+    if (inp) inp.value = authRes.suggested_username || '';
+  }
+  // status === 'new' — stay on welcome screen for manual tap
 });
 
 /* ── WELCOME ── */
@@ -2889,7 +2910,7 @@ function toast(msg, type='info') {
   el.textContent = msg;
   el.className = 'show ' + type;
   if (_toastTimer) clearTimeout(_toastTimer);
-  _toastTimer = setTimeout(() => { el.classList.remove('show'); }, 3000);
+  _toastTimer = setTimeout(() => { el.classList.remove('show'); }, 8000);
 }
 
 /* ── FORMAT TIME ── */
