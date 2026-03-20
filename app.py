@@ -726,6 +726,21 @@ def serve_index():
     resp.headers['Cache-Control'] = 'no-cache'
     return resp
 
+@app.route('/api/debug-auth', methods=['POST'])
+def debug_auth():
+    """Temporary debug endpoint — shows exactly what tg_id the server sees."""
+    body    = request.json or {}
+    tg_user = body.get('tg_user') or get_tg_user_from_request()
+    tg_id   = str(tg_user.get('id', '')) if tg_user else 'NO_USER'
+    row     = query_db('SELECT id, username, tg_id FROM users WHERE tg_id=?', (tg_id,), one=True)
+    all_ids = [u['tg_id'] for u in query_db('SELECT tg_id FROM users ORDER BY id DESC LIMIT 5')]
+    return jsonify({
+        'seen_tg_id': tg_id,
+        'found_user': row['username'] if row else None,
+        'last_5_tg_ids': all_ids,
+        'tg_user_raw': tg_user,
+    })
+
 @app.route('/api/auth', methods=['POST'])
 def auth():
     body    = request.json or {}
