@@ -203,7 +203,7 @@ body::before {
   padding:16px;
   margin-bottom:12px;
   position:relative;
-  overflow:hidden;
+  overflow:visible;
 }
 .panel::before {
   content:'';
@@ -757,8 +757,8 @@ body::before {
 }
 .bingo-card-grid.game-card .bc-header { font-size:clamp(10px,3vw,14px); padding:2px; white-space:nowrap; }
 .bingo-card-grid.game-card .bc-cell   { aspect-ratio:unset; overflow:hidden; min-height:0; min-width:0; font-size:clamp(10px,2.8vw,14px); padding:1px; }
-#cards-area.single .bingo-card-grid.game-card .bc-cell   { font-size:clamp(11px,3.2vw,15px); }
-#cards-area.single .bingo-card-grid.game-card .bc-header { font-size:clamp(12px,3.8vw,17px); }
+#cards-area.single .bingo-card-grid.game-card .bc-cell   { font-size:clamp(10px,2.8vw,13px); }
+#cards-area.single .bingo-card-grid.game-card .bc-header { font-size:clamp(10px,3vw,14px); }
 #cards-area:not(.single) .bingo-card-grid.game-card .bc-header { font-size:clamp(10px,3.2vw,15px); }
 #cards-area:not(.single) .bingo-card-grid.game-card .bc-cell   { font-size:clamp(9px,2.8vw,13px); }
 #card2-area { border-left:2px solid var(--pink2); padding-left:5px; }
@@ -771,25 +771,39 @@ body::before {
   gap:3px;
   width:100%; height:100%;
 }
-/* Preview cards — sized to leave room for Proceed button */
-#screen-card-preview .panel { flex-shrink:0; }  /* prevent panels collapsing in flex column */
+/* Preview — panels never shrink, cards capped in size */
+#screen-card-preview .panel { flex-shrink:0; }
+/* Single: centered, constrained. Dual: both flex:1, equal */
+#preview-cards-wrap { align-items:stretch !important; }
+#preview-card1-outer {
+  max-width:min(58vw,240px);
+  margin:0 auto;
+  display:flex; flex-direction:column;
+}
+#preview-card2-wrap {
+  display:flex; flex-direction:column;
+}
+#preview-card1-outer .panel,
+#preview-card2-wrap  .panel {
+  flex:1; display:flex; flex-direction:column;
+}
+#preview-card1-outer .panel .bingo-card-grid,
+#preview-card2-wrap  .panel .bingo-card-grid {
+  flex:1;
+}
+#screen-card-preview.dual #preview-card1-outer {
+  max-width:none; flex:1; margin:0;
+}
 #preview-card-grid, #preview-card2-grid {
   height:auto; width:100%;
-  max-width:min(72vw, 270px);  /* single: comfortably fits with proceed visible */
-  margin:0 auto;
 }
 #preview-card-grid .bc-header, #preview-card2-grid .bc-header,
 #preview-card-grid .bc-cell, #preview-card2-grid .bc-cell {
   aspect-ratio:1;
-  font-size:clamp(10px,2.8vw,13px);
+  font-size:clamp(9px,2.5vw,13px);
 }
 #preview-card-grid .bc-cell.free, #preview-card2-grid .bc-cell.free {
   font-size:clamp(7px,2vw,10px);
-}
-/* Dual: equal size side-by-side */
-#screen-card-preview.dual #preview-card-grid,
-#screen-card-preview.dual #preview-card2-grid {
-  max-width:min(44vw, 200px);
 }
 #screen-card-preview.dual #preview-card-grid .bc-header,
 #screen-card-preview.dual #preview-card2-grid .bc-header,
@@ -1306,9 +1320,9 @@ body::before {
     <div class="screen" id="screen-card-preview">
       <div class="screen-title" id="preview-title">◈ YOUR CARD</div>
       <!-- Side-by-side for dual, full width for single -->
-      <div id="preview-cards-wrap" style="display:flex;gap:8px;align-items:flex-start">
+      <div id="preview-cards-wrap" style="display:flex;gap:8px;align-items:flex-start;justify-content:center">
         <!-- Card 1 -->
-        <div style="flex:1;min-width:0">
+        <div id="preview-card1-outer" style="min-width:0">
           <div id="preview-card1-label" style="display:none;font-size:10px;font-weight:700;color:var(--cyan);text-align:center;margin-bottom:4px;letter-spacing:1px">CARD 1</div>
           <div class="panel panel-cyan fade-in" style="margin-bottom:8px;padding:10px">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
@@ -1319,7 +1333,7 @@ body::before {
           </div>
         </div>
         <!-- Card 2 (dual mode) -->
-        <div id="preview-card2-wrap" style="flex:1;min-width:0;display:none">
+        <div id="preview-card2-wrap" style="flex:1;min-width:0;display:none;flex-direction:column">
           <div id="preview-card2-label" style="font-size:10px;font-weight:700;color:var(--pink);text-align:center;margin-bottom:4px;letter-spacing:1px">CARD 2</div>
           <div class="panel panel-pink fade-in" style="margin-bottom:8px;padding:10px">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
@@ -1422,9 +1436,20 @@ body::before {
 
     <!-- HISTORY -->
     <div class="screen" id="screen-history">
-      <div class="screen-title" id="history-title">◈ GAME HISTORY</div>
-      <div class="panel fade-in">
-        <div id="history-list"><div class="empty">Loading…</div></div>
+      <div class="screen-title">◈ HISTORY</div>
+      <div class="tab-row">
+        <button class="tab-btn active" id="tab-ghist" onclick="switchHistTab('game')">🎮 Games</button>
+        <button class="tab-btn" id="tab-thist" onclick="switchHistTab('tx')">💳 Transactions</button>
+      </div>
+      <div class="tab-pane active" id="pane-ghist">
+        <div class="panel fade-in">
+          <div id="history-list"><div class="empty">Loading…</div></div>
+        </div>
+      </div>
+      <div class="tab-pane" id="pane-thist">
+        <div class="panel fade-in">
+          <div id="tx-list"><div class="empty">Loading…</div></div>
+        </div>
       </div>
     </div>
 
@@ -1854,7 +1879,8 @@ function navToRanks()   {
 }
 function navToHistory() {
   if (_inGame) { toast('Leave or forfeit the game first', 'error'); return; }
-  loadHistory(); showScreen('screen-history'); setActiveNav('nav-history');
+  switchHistTab('game'); loadHistory();
+  showScreen('screen-history'); setActiveNav('nav-history');
 }
 function navToProfile() {
   if (_inGame) { toast('Leave or forfeit the game first', 'error'); return; }
@@ -2060,12 +2086,15 @@ function buildNumGrid(taken = []) {
     existing.forEach(div => {
       const i = parseInt(div.dataset.num);
       const isTaken = taken.includes(i);
-      const isChosen = S.pickedNumber === i;
-      const wasTaken = div.classList.contains('taken');
+      const isChosen  = S.pickedNumber  === i;
+      const isChosen2 = S.dualCard && S.pickedNumber2 === i;
+      const wasTaken  = div.classList.contains('taken');
       if (!wasTaken && isTaken) {
         div.className = 'num-cell taken'; div.onclick = null;
       } else if (!isTaken) {
-        let cls = 'num-cell' + (isChosen ? ' chosen' : '');
+        let cls = 'num-cell';
+        if (isChosen)  cls += ' chosen';
+        if (isChosen2) cls += ' chosen2';
         if (div.className !== cls) div.className = cls;
         if (!div.onclick) div.onclick = () => pickNumber(i);
       }
@@ -2074,11 +2103,13 @@ function buildNumGrid(taken = []) {
   }
   grid.innerHTML = '';
   for (let i = 1; i <= 100; i++) {
-    const isTaken = taken.includes(i);
-    const isChosen = S.pickedNumber === i;
+    const isTaken  = taken.includes(i);
+    const isChosen  = S.pickedNumber  === i;
+    const isChosen2 = S.dualCard && S.pickedNumber2 === i;
     let cls = 'num-cell';
-    if (isTaken) cls += ' taken';
-    else if (isChosen) cls += ' chosen';
+    if (isTaken)   cls += ' taken';
+    else if (isChosen)  cls += ' chosen';
+    if (isChosen2) cls += ' chosen2';
     const div = document.createElement('div');
     div.className = cls; div.textContent = i; div.dataset.num = i;
     if (!isTaken) div.onclick = () => pickNumber(i);
@@ -2154,6 +2185,8 @@ function renderPreview() {
   document.getElementById('preview-card2-wrap').style.display  = dual ? 'flex'  : 'none';
   const _ps = document.getElementById('screen-card-preview');
   if (_ps) _ps.classList.toggle('dual', dual);
+  const _c1o = document.getElementById('preview-card1-outer');
+  if (_c1o) { _c1o.style.flex = dual ? '1' : ''; }
   document.getElementById('preview-lucky').textContent  = n  || '—';
   const el2 = document.getElementById('preview-lucky2');
   if (el2) el2.textContent = n2 || '—';
@@ -2678,6 +2711,38 @@ async function loadLeaderboard() {
 }
 
 /* ── HISTORY ── */
+function switchHistTab(tab) {
+  document.getElementById('tab-ghist').classList.toggle('active', tab==='game');
+  document.getElementById('tab-thist').classList.toggle('active', tab==='tx');
+  document.getElementById('pane-ghist').classList.toggle('active', tab==='game');
+  document.getElementById('pane-thist').classList.toggle('active', tab==='tx');
+  if (tab==='tx') loadTransactions();
+}
+
+async function loadTransactions() {
+  const el = document.getElementById('tx-list');
+  el.innerHTML = '<div class="empty">Loading…</div>';
+  try {
+    const rows = await api('GET', '/api/transactions');
+    if (!rows.length) { el.innerHTML = '<div class="empty"><div class="empty-icon">💳</div>No transactions yet.</div>'; return; }
+    el.innerHTML = rows.map(t => {
+      const isDeposit = t.type === 'deposit';
+      const colour = isDeposit ? 'var(--green)' : 'var(--red)';
+      const icon   = isDeposit ? '↓' : '↑';
+      const label  = isDeposit ? 'DEPOSIT' : 'WITHDRAWAL';
+      const amount = (isDeposit ? '+' : '-') + (t.amount||0).toLocaleString();
+      return `<div class="hist-row">
+        <div class="hist-icon" style="color:${colour}">${icon}</div>
+        <div class="hist-detail">
+          <div class="hist-label" style="color:${colour}">${label}</div>
+          <div class="hist-date">${new Date(t.created_at).toLocaleString()}</div>
+        </div>
+        <div class="hist-amount" style="color:${colour}">${amount} ETB</div>
+      </div>`;
+    }).join('');
+  } catch (e) { el.innerHTML = '<div class="empty">Error loading.</div>'; }
+}
+
 async function loadHistory() {
   const el = document.getElementById('history-list');
   el.innerHTML = '<div class="empty">Loading…</div>';
