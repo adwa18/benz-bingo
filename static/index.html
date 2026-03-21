@@ -776,7 +776,7 @@ body::before {
 /* Single: centered, constrained. Dual: both flex:1, equal */
 #preview-cards-wrap { align-items:stretch !important; }
 #preview-card1-outer {
-  max-width:min(58vw,240px);
+  max-width:min(70vw,270px);
   margin:0 auto;
   display:flex; flex-direction:column;
 }
@@ -1204,8 +1204,9 @@ body::before {
           <input class="input" id="input-username" placeholder="Choose your callsign" maxlength="20">
         </div>
         <div class="input-group">
-          <div class="label">Phone Number</div>
-          <input class="input" id="input-phone" type="tel" placeholder="Your phone number (required)">
+          <div class="label">Phone Number <span style="color:var(--red)">*</span></div>
+          <input class="input" id="input-phone" type="tel" placeholder="e.g. 0912345678 or +251912345678">
+          <div style="font-size:10px;color:var(--text3);margin-top:4px">Required for deposits &amp; withdrawals</div>
         </div>
         <button class="btn btn-cyan btn-full" onclick="submitRegister()" style="margin-bottom:10px">
           ◈ ACTIVATE ACCOUNT
@@ -1568,6 +1569,32 @@ body::before {
           <span class="mono" style="font-size:16px;color:var(--amber)" id="ps-balance">0 ETB</span>
         </div>
       </div>
+      <!-- Invite Friends -->
+      <div class="panel panel-amber fade-in">
+        <div class="label" style="margin-bottom:10px">🎁 Invite Friends</div>
+        <div style="background:var(--surf2);border-radius:10px;padding:12px;margin-bottom:12px;text-align:center">
+          <div style="font-size:11px;font-weight:700;color:var(--text)">Earn <span style="color:var(--amber)" id="ps-bonus-amount">20</span> ETB every <span id="ps-per-bonus">10</span> friends!</div>
+          <div style="font-size:10px;color:var(--text3);margin-top:3px">Share your link → they register → you earn</div>
+        </div>
+        <div class="label" style="margin-bottom:6px">Your Referral Link</div>
+        <div class="ref-link-box" id="ps-ref-link" style="cursor:pointer" onclick="pscopyreferral()">Loading…</div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button class="btn btn-ghost btn-full btn-sm" onclick="pscopyreferral()">📋 Copy</button>
+          <button class="btn btn-cyan btn-full btn-sm" onclick="psshareReferral()">📨 Share</button>
+        </div>
+        <div style="display:flex;gap:10px;margin-top:12px">
+          <div style="flex:1;background:var(--surf2);border-radius:10px;padding:10px;text-align:center">
+            <div class="mono" style="font-size:22px;color:var(--cyan)" id="ps-ref-count">0</div>
+            <div style="font-size:10px;color:var(--text3);margin-top:2px">Friends Joined</div>
+          </div>
+          <div style="flex:1;background:var(--surf2);border-radius:10px;padding:10px;text-align:center">
+            <div class="mono" style="font-size:22px;color:var(--amber)" id="ps-ref-next">10</div>
+            <div style="font-size:10px;color:var(--text3);margin-top:2px">For Next Bonus</div>
+          </div>
+        </div>
+        <div style="font-size:11px;font-weight:700;color:var(--text2);margin:12px 0 6px">Recent Friends</div>
+        <div id="ps-friends-list" style="font-size:12px;color:var(--text2)"><div class="empty">Loading…</div></div>
+      </div>
       <!-- Theme -->
       <div class="panel fade-in">
         <div style="display:flex;align-items:center;justify-content:space-between">
@@ -1810,10 +1837,14 @@ async function submitRegister() {
   const refId    = document.getElementById('reg-ref-id').value.trim();
   if (!username) { toast('Enter a username', 'error'); return; }
   if (!phone)    { toast('Phone number is required', 'error'); return; }
+  const phoneClean = phone.replace(/[\s\-]/g, '');
+  if (!/^(\+?251|0)[0-9]{9}$/.test(phoneClean)) {
+    toast('Enter a valid Ethiopian phone number', 'error'); return;
+  }
   if (username.length < 2 || username.length > 20) { toast('Username: 2–20 characters', 'error'); return; }
   try {
     const res = await api('POST', '/api/register', {
-      tg_id: S.tgUser.id, username, phone,
+      tg_id: S.tgUser.id, username, phone: phone.replace(/[\s\-]/g, ''),
       referred_by: refId ? parseInt(refId) : null
     });
     S.user = res.user;
@@ -2784,18 +2815,44 @@ async function loadProfile() {
     const adminShortcut = document.getElementById('admin-shortcut');
     if (adminShortcut) adminShortcut.style.display = (u.is_admin||u.is_owner) ? 'block' : 'none';
   } catch (_) {}
-  // Load friends data
-  try {
-    const ref = await api('GET', '/api/referral-stats');
-    document.getElementById('ref-count').textContent = ref.referral_count || 0;
-    const next = ref.next_bonus_at - ref.referral_count;
-    document.getElementById('ref-next-at').textContent = next + ' more';
-  } catch (_) {}
   // Build referral link
   const botName = window._botUsername || 'BenzBingoBot';
   const refLink = `https://t.me/${botName}?start=${S.tgUser?.id||''}`;
-  const linkEl = document.getElementById('referral-link-box');
+  const linkEl = document.getElementById('ps-ref-link');
   if (linkEl) linkEl.textContent = refLink;
+  // Load referral stats
+  try {
+    const ref = await api('GET', '/api/referral-stats');
+    const rc  = ref.referral_count || 0;
+    const per = ref.per_bonus || 10;
+    const nxt = ref.next_bonus_at || per;
+    document.getElementById('ps-ref-count').textContent = rc;
+    document.getElementById('ps-ref-next').textContent  = nxt - rc > 0 ? nxt - rc : per;
+    const bonusEl = document.getElementById('ps-bonus-amount');
+    if (bonusEl) bonusEl.textContent = ref.bonus_amount || 20;
+    const perEl = document.getElementById('ps-per-bonus');
+    if (perEl) perEl.textContent = per;
+    const listEl = document.getElementById('ps-friends-list');
+    const fr = ref.friends || [];
+    listEl.innerHTML = fr.length
+      ? fr.map(f => `<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border)">`
+          + `<span>👤 ${f.username}</span>`
+          + `<span style="color:var(--text3);font-size:11px">${String(f.created_at||'').slice(0,10)}</span></div>`).join('')
+      : '<div class="empty" style="padding:16px 0">No friends yet — share your link!</div>';
+  } catch (_) {}
+}
+
+function pscopyreferral() {
+  const t = document.getElementById('ps-ref-link')?.textContent || '';
+  if (navigator.clipboard) navigator.clipboard.writeText(t).then(() => toast('Link copied!', 'success'));
+  else toast(t, 'info');
+}
+function psshareReferral() {
+  const link = document.getElementById('ps-ref-link')?.textContent || '';
+  const msg  = 'Join Benz Bingo 🎱 and win ETB!\n🎁 +10 ETB welcome bonus + 10% on first deposit!';
+  const url  = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(msg)}`;
+  if (window.Telegram?.WebApp?.openTelegramLink) window.Telegram.WebApp.openTelegramLink(url);
+  else window.open(url, '_blank');
 }
 
 /* ── FRIENDS ── */
