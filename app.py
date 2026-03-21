@@ -1246,6 +1246,17 @@ def get_history():
     )
     return jsonify(rows)
 
+@app.route('/api/transactions', methods=['GET'])
+def get_transactions():
+    user, _, err = require_auth()
+    if err: return err
+    rows = query_db(
+        'SELECT type, amount, ref, note, created_at FROM transactions '
+        'WHERE tg_id=? ORDER BY created_at DESC LIMIT 30',
+        (user['tg_id'],)
+    )
+    return jsonify(rows)
+
 @app.route('/api/leaderboard', methods=['GET'])
 def leaderboard():
     rows = query_db(
