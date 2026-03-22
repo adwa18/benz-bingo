@@ -757,8 +757,8 @@ body::before {
 }
 .bingo-card-grid.game-card .bc-header { font-size:clamp(10px,3vw,14px); padding:2px; white-space:nowrap; }
 .bingo-card-grid.game-card .bc-cell   { aspect-ratio:unset; overflow:hidden; min-height:0; min-width:0; font-size:clamp(10px,2.8vw,14px); padding:1px; }
-#cards-area.single .bingo-card-grid.game-card .bc-cell   { font-size:clamp(10px,2.8vw,13px); }
-#cards-area.single .bingo-card-grid.game-card .bc-header { font-size:clamp(10px,3vw,14px); }
+#cards-area.single .bingo-card-grid.game-card .bc-cell   { font-size:clamp(12px,3.8vw,17px); }
+#cards-area.single .bingo-card-grid.game-card .bc-header { font-size:clamp(13px,4vw,18px); }
 #cards-area:not(.single) .bingo-card-grid.game-card .bc-header { font-size:clamp(10px,3.2vw,15px); }
 #cards-area:not(.single) .bingo-card-grid.game-card .bc-cell   { font-size:clamp(9px,2.8vw,13px); }
 #card2-area { border-left:2px solid var(--pink2); padding-left:5px; }
@@ -776,7 +776,7 @@ body::before {
 /* Single: centered, constrained. Dual: both flex:1, equal */
 #preview-cards-wrap { align-items:stretch !important; }
 #preview-card1-outer {
-  max-width:min(70vw,270px);
+  max-width:min(76vw,300px);
   margin:0 auto;
   display:flex; flex-direction:column;
 }
@@ -1646,7 +1646,12 @@ body::before {
         </div>
       </div>
       <div class="panel fade-in">
-        <div class="label" style="margin-bottom:10px">Users</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <div class="label">Users <span id="admin-user-count" style="color:var(--text3);font-weight:400"></span></div>
+        </div>
+        <div style="display:flex;gap:6px;margin-bottom:10px">
+          <input class="input" id="admin-user-search" placeholder="Search username or TG ID…" style="margin-bottom:0;flex:1" oninput="loadAdminUsers()">
+        </div>
         <div id="admin-users-list"></div>
       </div>
     </div>
@@ -1673,6 +1678,7 @@ body::before {
   </nav>
 
 </div><!-- /app -->
+<div id="benz-footer" style="display:none;position:fixed;bottom:calc(var(--nav-h));left:0;right:0;text-align:center;padding:3px 0;font-size:9px;color:var(--text3);background:var(--bg2);z-index:99;letter-spacing:.5px">Created by <a href="tel:0913252238" style="color:var(--cyan);text-decoration:none;font-weight:700" onclick="if(window.Telegram?.WebApp?.openLink)window.Telegram.WebApp.openLink('tel:0913252238')">Benzion Creatives</a></div>
 
 <!-- BINGO WIN OVERLAY -->
 <div id="bingo-overlay">
@@ -1857,6 +1863,8 @@ async function onLoggedIn() {
   renderHeader();
   document.getElementById('header').style.display = 'flex';
   document.getElementById('bottom-nav').style.display = 'flex';
+  const _f = document.getElementById('benz-footer');
+  if (_f) _f.style.display = 'block';
   try {
     const games = await api('GET', '/api/games');
     const myUsername = S.user?.username;
@@ -2780,7 +2788,6 @@ async function loadHistory() {
   try {
     const rows = await api('GET', '/api/history');
     if (!rows.length) { el.innerHTML = '<div class="empty"><div class="empty-icon">◈</div>No games yet.</div>'; return; }
-    document.getElementById('history-title').textContent = `◈ HISTORY (${rows.length})`;
     el.innerHTML = rows.map(h => {
       const isLeft = h.result === 'left';
       const colour = h.won ? 'var(--green)' : isLeft ? 'var(--text3)' : 'var(--red)';
@@ -2898,10 +2905,10 @@ async function loadAdminStats() {
   try {
     const s = await api('GET', '/api/admin/stats');
     document.getElementById('admin-stats').innerHTML = `
-      <div class="stat-box"><div class="stat-val">${s.total_users}</div><div class="stat-lbl">Users</div></div>
       <div class="stat-box"><div class="stat-val">${s.active_games}</div><div class="stat-lbl">Active</div></div>
       <div class="stat-box"><div class="stat-val">${s.finished_games}</div><div class="stat-lbl">Finished</div></div>
-      <div class="stat-box"><div class="stat-val mono" style="font-size:16px">${(s.total_prizes||0).toLocaleString()}</div><div class="stat-lbl">Prizes ETB</div></div>`;
+      <div class="stat-box"><div class="stat-val mono" style="font-size:16px">${(s.total_prizes||0).toLocaleString()}</div><div class="stat-lbl">Prizes ETB</div></div>
+      <div class="stat-box"><div class="stat-val mono" style="font-size:16px;color:var(--amber)">${(s.house_cut_etb||0).toLocaleString()}</div><div class="stat-lbl">House ETB</div></div>`;
   } catch (_) {}
 }
 async function loadAdminGames() {
@@ -2922,16 +2929,20 @@ async function loadAdminGames() {
 }
 async function loadAdminUsers() {
   const el = document.getElementById('admin-users-list');
+  const q  = document.getElementById('admin-user-search')?.value.trim() || '';
   try {
-    const users = await api('GET', '/api/admin/users');
+    const users = await api('GET', '/api/admin/users' + (q ? `?q=${encodeURIComponent(q)}` : ''));
     const dl = document.getElementById('admin-uname-list');
     if (dl) dl.innerHTML = users.map(u=>`<option value="${u.username}">${u.username} — ${u.balance.toLocaleString()} ETB</option>`).join('');
-    el.innerHTML = users.slice(0,20).map(u=>`
+    const countEl = document.getElementById('admin-user-count');
+    if (countEl) countEl.textContent = `(${users.length}${q?' found':''} · showing 20)`;
+    if (!users.length) { el.innerHTML = '<div class="empty">No users found.</div>'; return; }
+    el.innerHTML = users.map(u=>`
       <div class="user-row-admin" onclick="document.getElementById('admin-uname').value='${u.username}'">
         <div class="u-avatar">${u.username[0].toUpperCase()}</div>
-        <div>
+        <div style="flex:1">
           <div class="u-name">${u.username}${u.is_admin?'<span class="u-badge badge-admin">ADMIN</span>':''}</div>
-          <div class="u-meta">${u.wins}W · ${u.games_played}G · ${u.balance.toLocaleString()} ETB</div>
+          <div class="u-meta">${u.wins}W · ${u.games_played}G · ${u.balance.toLocaleString()} ETB · TG:${u.tg_id}</div>
         </div>
       </div>`).join('');
   } catch (_) { el.innerHTML = '<div class="empty">Error loading.</div>'; }
