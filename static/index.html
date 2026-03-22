@@ -140,7 +140,7 @@ body::before {
   overflow-y:auto;
   display:none;
   flex-direction:column;
-  padding:14px 14px calc(var(--nav-h) + 14px);
+  padding:14px 14px calc(var(--nav-h) + 36px);
 }
 .screen.active { display:flex; }
 #screen-game { padding:0 !important; }
@@ -757,8 +757,9 @@ body::before {
 }
 .bingo-card-grid.game-card .bc-header { font-size:clamp(10px,3vw,14px); padding:2px; white-space:nowrap; }
 .bingo-card-grid.game-card .bc-cell   { aspect-ratio:unset; overflow:hidden; min-height:0; min-width:0; font-size:clamp(10px,2.8vw,14px); padding:1px; }
-#cards-area.single .bingo-card-grid.game-card .bc-cell   { font-size:clamp(12px,3.8vw,17px); }
-#cards-area.single .bingo-card-grid.game-card .bc-header { font-size:clamp(13px,4vw,18px); }
+/* Single card: larger numbers only, cell size stays compact */
+#cards-area.single .bingo-card-grid.game-card .bc-cell   { font-size:clamp(13px,4vw,18px); font-weight:900; }
+#cards-area.single .bingo-card-grid.game-card .bc-header { font-size:clamp(11px,3.2vw,15px); font-weight:700; }
 #cards-area:not(.single) .bingo-card-grid.game-card .bc-header { font-size:clamp(10px,3.2vw,15px); }
 #cards-area:not(.single) .bingo-card-grid.game-card .bc-cell   { font-size:clamp(9px,2.8vw,13px); }
 #card2-area { border-left:2px solid var(--pink2); padding-left:5px; }
@@ -776,7 +777,7 @@ body::before {
 /* Single: centered, constrained. Dual: both flex:1, equal */
 #preview-cards-wrap { align-items:stretch !important; }
 #preview-card1-outer {
-  max-width:min(76vw,300px);
+  max-width:min(68vw,280px);
   margin:0 auto;
   display:flex; flex-direction:column;
 }
@@ -785,11 +786,11 @@ body::before {
 }
 #preview-card1-outer .panel,
 #preview-card2-wrap  .panel {
-  flex:1; display:flex; flex-direction:column;
+  display:flex; flex-direction:column;
 }
 #preview-card1-outer .panel .bingo-card-grid,
 #preview-card2-wrap  .panel .bingo-card-grid {
-  flex:1;
+  /* natural height from aspect-ratio cells */
 }
 #screen-card-preview.dual #preview-card1-outer {
   max-width:none; flex:1; margin:0;
@@ -1315,6 +1316,7 @@ body::before {
         onclick="stopPickerPoll();showScreen('screen-lobby');setActiveNav('nav-play');startLobbyPolling()">
         ← BACK TO LOBBY
       </button>
+      <div style="height:28px;flex-shrink:0"></div>
     </div>
 
     <!-- CARD PREVIEW -->
@@ -1465,9 +1467,9 @@ body::before {
       <!-- Deposit pane -->
       <div class="tab-pane active" id="pane-dep">
         <div class="pay-info">
-          <div class="label" style="margin-bottom:6px">Send payment to</div>
-          <p>🏦 <strong>CBE:</strong> 1000532982565 (Tewodros Ephrem)</p>
-          <p>📱 <strong>Telebirr:</strong> 0913252238 (Tewodros Ephrem)</p>
+          <div class="label" style="margin-bottom:6px">Send payment to <span style="color:var(--text3);font-weight:400">(tap to copy)</span></div>
+          <p style="cursor:pointer" onclick="copyText('1000532982565','CBE number')">🏦 <strong>CBE:</strong> <span style="color:var(--cyan)">1000532982565</span> (Tewodros Ephrem)</p>
+          <p style="cursor:pointer;margin-top:6px" onclick="copyText('0913252238','Telebirr number')">📱 <strong>Telebirr:</strong> <span style="color:var(--cyan)">0913252238</span> (Tewodros Ephrem)</p>
         </div>
         <div class="bonus-badge" id="dep-bonus-badge" style="display:none">
           🎁 First deposit? You get <strong>+10% bonus</strong>!
@@ -2598,15 +2600,15 @@ async function playAgain() {
     const pBody = { picked_number: S.lastPickedNum, dual_card: S.lastDual||false };
     if (S.lastDual && S.lastPickedNum2) pBody.picked_number2 = S.lastPickedNum2;
     const joined = await api('POST', `/api/games/${gm.id}/join`, pBody);
-    S.currentGameId = gm.id;
-    S.selectedBet   = S.lastBet;
-    S.pickedNumber  = S.lastPickedNum;
-    S.pickedNumber2 = S.lastPickedNum2;
-    S.dualCard      = S.lastDual||false;
-    S.myCard        = joined.card;
-    S.myCard2       = joined.card2 || null;
-    S.myMarked      = [[2,2]];
-    S.myMarked2     = [[2,2]];
+    S.currentGameId  = gm.id;
+    S.selectedBet    = S.lastBet;
+    S.pickedNumber   = S.lastPickedNum;
+    S.pickedNumber2  = S.lastDual ? S.lastPickedNum2 : null;
+    S.dualCard       = !!(S.lastDual && joined.card2);
+    S.myCard         = joined.card;
+    S.myCard2        = S.dualCard ? (joined.card2 || null) : null;
+    S.myMarked       = joined.marked_cells || [[2,2]];
+    S.myMarked2      = joined.marked2      || [[2,2]];
     showScreen('screen-game');
     startGameScreen();
   } catch(e) {
@@ -2703,7 +2705,7 @@ async function submitDeposit() {
   if (!ref)    { toast('Enter transaction reference', 'error'); return; }
   if (!sender) { toast('Enter sender name', 'error'); return; }
   try {
-    await api('POST', '/api/deposit-request', { amount, tx_ref: ref, sender_name: sender });
+    await api('POST', '/api/deposit-request', { amount, reference: ref, sender_name: sender });
     toast('✅ Deposit request submitted! Admin will approve shortly.', 'success');
     document.getElementById('dep-amount').value = '';
     document.getElementById('dep-ref').value = '';
