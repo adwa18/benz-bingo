@@ -998,7 +998,8 @@ def join_game(gid):
     existing = query_db(
         'SELECT * FROM bingo_players WHERE game_id=? AND user_id=?', (gid, user['id']), one=True
     )
-    if existing:
+    if existing and not existing.get('kicked'):
+        # Already in game and not kicked — return existing card
         return jsonify({
             'status':      'already_joined',
             'card':        json.loads(existing['card'] or '[]'),
@@ -1006,6 +1007,38 @@ def join_game(gid):
             'marked_cells':json.loads(existing['marked_cells'] or '[[2,2]]'),
             'marked2':     json.loads(existing.get('marked2') or '[[2,2]]'),
         }), 200
+    if existing and existing.get('kicked'):
+        # Player left earlier — only allow rejoin during waiting/countdown, not active
+        if gm['status'] == 'active':
+            return jsonify({'error': 'Cannot rejoin a game already in progress'}), 400
+        fresh = query_db('SELECT * FROM users WHERE id=?', (user['id'],), one=True)
+        cost  = gm['bet_amount'] * (2 if dual_card else 1)
+        try:
+            is_owner_play = (int(fresh['tg_id']) == OWNER_TG_ID)
+        except (ValueError, TypeError):
+            is_owner_play = False
+        if not is_owner_play and fresh['balance'] < cost:
+            return jsonify({'error': 'Insufficient balance'}), 400
+        new_card  = generate_bingo_card(picked or random.randint(1, 100))
+        new_card2 = generate_bingo_card(picked2 or random.randint(1000, 9999)) if dual_card else None
+        with _db_lock:
+            if not is_owner_play:
+                execute_db('UPDATE users SET balance=balance-?, total_bet=total_bet+? WHERE id=?',
+                           (cost, cost, user['id']))
+            execute_db(
+                'UPDATE bingo_players SET kicked=0, card=?, card2=?, '
+                'picked_number=?, picked_number2=?, marked_cells=?, marked2=?, bet_paid=? WHERE id=?',
+                (json.dumps(new_card), json.dumps(new_card2) if new_card2 else None,
+                 picked, picked2 if dual_card else None,
+                 '[[2,2]]', '[[2,2]]', 2 if dual_card else 1, existing['id'])
+            )
+        return jsonify({
+            'status':       'rejoined',
+            'card':         new_card,
+            'card2':        new_card2,
+            'marked_cells': [[2, 2]],
+            'marked2':      [[2, 2]],
+        })
     if picked:
         taken = query_db(
             'SELECT id FROM bingo_players WHERE game_id=? AND (picked_number=? OR picked_number2=?)',
