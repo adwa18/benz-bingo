@@ -961,11 +961,12 @@ def get_game(gid):
         'SELECT bp.*, u.username FROM bingo_players bp '
         'JOIN users u ON bp.user_id=u.id WHERE bp.game_id=?', (gid,)
     )
+    active_players = [p for p in all_players if not p.get('kicked')]
     pot_units = sum(p.get('bet_paid', 1) for p in all_players)
     gm['players']      = [{'username': p['username'], 'picked_number': p['picked_number'],
                             'picked_number2': p.get('picked_number2'),
-                            'has_bingo': p['has_bingo']} for p in all_players]
-    gm['player_count'] = len(all_players)
+                            'has_bingo': p['has_bingo']} for p in active_players]
+    gm['player_count'] = len(active_players)
     gm['pot']          = pot_units * gm['bet_amount']
     gm['prize']        = int(gm['pot'] * (1 - HOUSE_CUT))
     my_row = next((p for p in all_players if p['user_id'] == user['id']), None)
@@ -1069,8 +1070,15 @@ def leave_game(gid):
             execute_db('UPDATE users SET balance=balance+? WHERE id=?', (cost, user['id']))
             remaining_all = query_db('SELECT id FROM bingo_players WHERE game_id=? AND kicked=0', (gid,))
             if not remaining_all:
+                # Last player left — close the room
                 execute_db("UPDATE bingo_games SET status='finished', finished_at=? WHERE id=?",
                            (time.time(), gid))
+            elif status == 'countdown' and len(remaining_all) == 1:
+                # Only one player left during countdown — reset to waiting
+                execute_db(
+                    "UPDATE bingo_games SET status='waiting', countdown_started_at=NULL WHERE id=?",
+                    (gid,)
+                )
             return jsonify({'ok': True, 'refunded': True})
         # Active forfeit — record as 'left' (not a loss)
         execute_db('UPDATE users SET games_played=games_played+1 WHERE id=?', (user['id'],))
@@ -1094,8 +1102,10 @@ def leave_game(gid):
                 ("INSERT INTO game_history (user_id,game_id,bet_amount,prize_won,won,result) VALUES (?,?,?,?,1,'win')",
                  (sole['user_id'], gid, gm['bet_amount'], prize2)),
             ])
-            _notify_queue.put({'tg_id': sole['user_id'], 'event': '_last_standing', 'data': {'prize': prize2}})
-            return jsonify({'ok': True, 'forfeited': cost})  # forfeiter sees forfeit screen; remaining player detects win via poll
+            sole_user = query_db('SELECT tg_id FROM users WHERE id=?', (sole['user_id'],), one=True)
+            if sole_user:
+                _notify_queue.put({'tg_id': int(sole_user['tg_id']), 'event': '_last_standing', 'data': {'prize': prize2}})
+            return jsonify({'ok': True, 'forfeited': cost, 'last_standing': True})
         # Notify remaining players that someone forfeited
         for p in remaining:
             urow = query_db('SELECT tg_id FROM users WHERE id=?', (p['user_id'],), one=True)
@@ -1206,8 +1216,10 @@ def claim_bingo(gid):
                     ("INSERT INTO game_history (user_id,game_id,bet_amount,prize_won,won,result) VALUES (?,?,?,?,1,'win')",
                      (sole['user_id'], gid, gm['bet_amount'], prize2)),
                 ])
-                _notify_queue.put({'tg_id': sole['user_id'], 'event': '_last_standing',
-                                   'data': {'prize': prize2}})
+                sole_tg = query_db('SELECT tg_id FROM users WHERE id=?', (sole['user_id'],), one=True)
+                if sole_tg:
+                    _notify_queue.put({'tg_id': int(sole_tg['tg_id']), 'event': '_last_standing',
+                                       'data': {'prize': prize2}})
             return jsonify({'kicked': True, 'error': 'Wrong BINGO — you have been removed from the game!'}), 200
         # Pot = sum of all actual payments (dual-card pays 2x)
         total_units = _calc_pot(gid)
@@ -1308,6 +1320,9 @@ def deposit_complete():
 def admin_stats():
     user, err = require_admin()
     if err: return err
+    _tp = query_db('SELECT COALESCE(SUM(prize_won),0) AS s FROM game_history', one=True)
+    _tb = query_db('SELECT COALESCE(SUM(bet_amount),0) AS s FROM game_history', one=True)
+    house_cut_etb = int((_tb or {}).get('s', 0) * HOUSE_CUT)
     stats = {
         'total_users':    query_db('SELECT COUNT(*) AS c FROM users', one=True)['c'],
         'total_games':    query_db('SELECT COUNT(*) AS c FROM bingo_games', one=True)['c'],
@@ -1316,8 +1331,8 @@ def admin_stats():
             one=True)['c'],
         'finished_games': query_db(
             "SELECT COUNT(*) AS c FROM bingo_games WHERE status='finished'", one=True)['c'],
-        'total_prizes':   query_db(
-            'SELECT COALESCE(SUM(prize_won),0) AS s FROM game_history', one=True)['s'],
+        'total_prizes':   (_tp or {}).get('s', 0),
+        'house_cut_etb':  house_cut_etb,
     }
     return jsonify(stats)
 
@@ -1325,7 +1340,15 @@ def admin_stats():
 def admin_users():
     user, err = require_admin()
     if err: return err
-    return jsonify(query_db('SELECT * FROM users ORDER BY created_at DESC'))
+    q = request.args.get('q', '').strip()
+    if q:
+        rows = query_db(
+            "SELECT * FROM users WHERE username LIKE ? OR tg_id=? ORDER BY created_at DESC LIMIT 20",
+            (f'%{q}%', q)
+        )
+    else:
+        rows = query_db('SELECT * FROM users ORDER BY created_at DESC LIMIT 20')
+    return jsonify(rows)
 
 @app.route('/api/admin/games', methods=['GET'])
 def admin_games():
@@ -1442,6 +1465,10 @@ def webapp_deposit_request():
         sent = _tg_notify_direct(aid, admin_txt)
         if not sent:
             _notify_queue.put({'tg_id': aid, 'event': 'custom', 'data': {'message': admin_txt}})
+    _notify_queue.put({'tg_id': int(user['tg_id']), 'event': 'custom', 'data': {'message':
+        f"⏳ <b>Deposit Request Received</b>\n\n"
+        f"Amount: <b>{amt:,.0f} ETB</b> · Ref: <code>{ref}</code>\n"
+        f"Pending admin approval. You'll be notified once confirmed. ✅"}})
     return jsonify({'status': 'submitted'})
 
 @app.route('/api/withdraw-request', methods=['POST'])
@@ -1480,6 +1507,11 @@ def webapp_withdraw_request():
         sent = _tg_notify_direct(aid, admin_txt)
         if not sent:
             _notify_queue.put({'tg_id': aid, 'event': 'custom', 'data': {'message': admin_txt}})
+    _notify_queue.put({'tg_id': int(user['tg_id']), 'event': 'custom', 'data': {'message':
+        f"⏳ <b>Withdrawal Request Received</b>\n\n"
+        f"Amount: <b>{amt:,.0f} ETB</b> via {bank}\n"
+        f"Account: {phone} ({account_name})\n"
+        f"Pending processing. You'll be notified once sent. ✅"}})
     return jsonify({'status': 'submitted'})
 
 @app.route('/health')
