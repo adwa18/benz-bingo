@@ -757,11 +757,12 @@ body::before {
 }
 .bingo-card-grid.game-card .bc-header { font-size:clamp(10px,3vw,14px); padding:2px; white-space:nowrap; }
 .bingo-card-grid.game-card .bc-cell   { aspect-ratio:unset; overflow:hidden; min-height:0; min-width:0; font-size:clamp(10px,2.8vw,14px); padding:1px; }
-/* Single card: larger numbers only, cell size stays compact */
-#cards-area.single .bingo-card-grid.game-card .bc-cell   { font-size:clamp(13px,4vw,18px); font-weight:900; }
-#cards-area.single .bingo-card-grid.game-card .bc-header { font-size:clamp(11px,3.2vw,15px); font-weight:700; }
-#cards-area:not(.single) .bingo-card-grid.game-card .bc-header { font-size:clamp(10px,3.2vw,15px); }
-#cards-area:not(.single) .bingo-card-grid.game-card .bc-cell   { font-size:clamp(9px,2.8vw,13px); }
+/* Single card: big bold numbers, small BINGO header */
+#cards-area.single .bingo-card-grid.game-card .bc-cell   { font-size:clamp(14px,4.2vw,19px); font-weight:900; }
+#cards-area.single .bingo-card-grid.game-card .bc-header { font-size:clamp(9px,2.4vw,12px); font-weight:700; }
+/* Dual card: compact cells so leave button stays visible */
+#cards-area:not(.single) .bingo-card-grid.game-card .bc-header { font-size:clamp(8px,2.2vw,11px); }
+#cards-area:not(.single) .bingo-card-grid.game-card .bc-cell   { font-size:clamp(8px,2.2vw,11px); }
 #card2-area { border-left:2px solid var(--pink2); padding-left:5px; }
 .game-bottom { flex:1 1 0; overflow:hidden; padding:6px 10px calc(var(--nav-h) + 4px); display:flex; flex-direction:column; gap:4px; min-height:0; }
 
@@ -777,7 +778,8 @@ body::before {
 /* Single: centered, constrained. Dual: both flex:1, equal */
 #preview-cards-wrap { align-items:stretch !important; }
 #preview-card1-outer {
-  max-width:min(68vw,280px);
+  max-width:min(88vw,340px);
+  width:100%;
   margin:0 auto;
   display:flex; flex-direction:column;
 }
@@ -801,7 +803,8 @@ body::before {
 #preview-card-grid .bc-header, #preview-card2-grid .bc-header,
 #preview-card-grid .bc-cell, #preview-card2-grid .bc-cell {
   aspect-ratio:1;
-  font-size:clamp(9px,2.5vw,13px);
+  font-size:clamp(12px,3.5vw,16px);
+  font-weight:700;
 }
 #preview-card-grid .bc-cell.free, #preview-card2-grid .bc-cell.free {
   font-size:clamp(7px,2vw,10px);
@@ -810,7 +813,8 @@ body::before {
 #screen-card-preview.dual #preview-card2-grid .bc-header,
 #screen-card-preview.dual #preview-card-grid .bc-cell,
 #screen-card-preview.dual #preview-card2-grid .bc-cell {
-  font-size:clamp(8px,2.2vw,11px);
+  font-size:clamp(10px,2.8vw,13px);
+  font-weight:700;
 }
 /* Lucky column highlight in preview — distinct from called-hl */
 .bc-cell.preview-lucky {
@@ -1206,8 +1210,13 @@ body::before {
         </div>
         <div class="input-group">
           <div class="label">Phone Number <span style="color:var(--red)">*</span></div>
-          <input class="input" id="input-phone" type="tel" placeholder="e.g. 0912345678 or +251912345678">
-          <div style="font-size:10px;color:var(--text3);margin-top:4px">Required for deposits &amp; withdrawals</div>
+          <div style="display:flex;gap:8px;align-items:flex-start">
+            <input class="input" id="input-phone" type="tel" placeholder="e.g. 0912345678" style="margin-bottom:0;flex:1">
+            <button class="btn btn-ghost btn-sm" style="flex-shrink:0;padding:11px 10px" onclick="requestTgPhone()" title="Share Telegram phone">
+              📲
+            </button>
+          </div>
+          <div style="font-size:10px;color:var(--text3);margin-top:4px">Required · tap 📲 to share from Telegram</div>
         </div>
         <button class="btn btn-cyan btn-full" onclick="submitRegister()" style="margin-bottom:10px">
           ◈ ACTIVATE ACCOUNT
@@ -1839,6 +1848,18 @@ async function handleWelcomeClick() {
 }
 
 /* ── REGISTER ── */
+function requestTgPhone() {
+  if (!window.Telegram?.WebApp?.requestContact) {
+    toast('Open in Telegram to share phone', 'info'); return;
+  }
+  window.Telegram.WebApp.requestContact((ok, contact) => {
+    if (!ok || !contact?.contact?.phone_number) return;
+    const ph = contact.contact.phone_number;
+    const el = document.getElementById('input-phone');
+    if (el) { el.value = ph; toast('Phone number filled from Telegram!', 'success'); }
+  });
+}
+
 async function submitRegister() {
   const username = document.getElementById('input-username').value.trim();
   const phone    = document.getElementById('input-phone').value.trim();
@@ -2497,9 +2518,12 @@ function handleGameFinished(gm) {
 /* ── RESULT SCREEN ── */
 function showResult(won, balance, winnerName, kicked=false, forfeited=false, forfeitedAmt=0) {
   if (S.selectedBet && S.pickedNumber) {
-    S.lastBet = S.selectedBet;
-    S.lastPickedNum = S.pickedNumber;
-    S.lastCard = S.myCard;
+    S.lastBet        = S.selectedBet;
+    S.lastPickedNum  = S.pickedNumber;
+    S.lastPickedNum2 = S.pickedNumber2;
+    S.lastCard       = S.myCard;
+    S.lastCard2      = S.myCard2;
+    S.lastDual       = S.dualCard;
   }
   const el = document.getElementById('result-inner');
   if (won) {
@@ -2933,11 +2957,13 @@ async function loadAdminUsers() {
   const el = document.getElementById('admin-users-list');
   const q  = document.getElementById('admin-user-search')?.value.trim() || '';
   try {
-    const users = await api('GET', '/api/admin/users' + (q ? `?q=${encodeURIComponent(q)}` : ''));
+    const res   = await api('GET', '/api/admin/users' + (q ? `?q=${encodeURIComponent(q)}` : ''));
+    const users = res.users || [];
+    const total = res.total || 0;
     const dl = document.getElementById('admin-uname-list');
     if (dl) dl.innerHTML = users.map(u=>`<option value="${u.username}">${u.username} — ${u.balance.toLocaleString()} ETB</option>`).join('');
     const countEl = document.getElementById('admin-user-count');
-    if (countEl) countEl.textContent = `(${users.length}${q?' found':''} · showing 20)`;
+    if (countEl) countEl.textContent = q ? `(${users.length} found)` : `(${total} total)`;
     if (!users.length) { el.innerHTML = '<div class="empty">No users found.</div>'; return; }
     el.innerHTML = users.map(u=>`
       <div class="user-row-admin" onclick="document.getElementById('admin-uname').value='${u.username}'">
@@ -2953,7 +2979,8 @@ async function adminSetAdmin(makeAdmin) {
   const username = (document.getElementById('admin-promote-uname')?.value||'').trim();
   if (!username) { toast('Enter a username','error'); return; }
   try {
-    const users = await api('GET', '/api/admin/users');
+    const res = await api('GET', '/api/admin/users');
+    const users = res.users || res;
     const target = users.find(u=>u.username===username);
     if (!target) { toast('User not found','error'); return; }
     await api('POST', `/api/admin/users/${target.id}/admin`, { is_admin: makeAdmin });
