@@ -1374,14 +1374,15 @@ def admin_users():
     user, err = require_admin()
     if err: return err
     q = request.args.get('q', '').strip()
+    total = query_db('SELECT COUNT(*) AS c FROM users', one=True)['c']
     if q:
         rows = query_db(
-            "SELECT * FROM users WHERE username LIKE ? OR tg_id=? ORDER BY created_at DESC LIMIT 20",
+            "SELECT * FROM users WHERE username LIKE ? OR tg_id=? ORDER BY created_at DESC LIMIT 10",
             (f'%{q}%', q)
         )
     else:
-        rows = query_db('SELECT * FROM users ORDER BY created_at DESC LIMIT 20')
-    return jsonify(rows)
+        rows = query_db('SELECT * FROM users ORDER BY created_at DESC LIMIT 10')
+    return jsonify({'users': rows, 'total': total})
 
 @app.route('/api/admin/games', methods=['GET'])
 def admin_games():
