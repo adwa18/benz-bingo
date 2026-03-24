@@ -2248,7 +2248,8 @@ async def cmd_adep(message: Message, session: aiohttp.ClientSession):
                              'Tip: /admindeposit &lt;tg_id&gt; to look up username first'); return
     tid, amt = int(parts[1]), float(parts[2])
     try:
-        users  = await bot_api('GET', '/api/admin/users', tg_id=message.from_user.id, session=session)
+        res_u  = await bot_api('GET', '/api/admin/users', tg_id=message.from_user.id, session=session)
+        users  = res_u.get('users', res_u) if isinstance(res_u, dict) else res_u
         target = next((u for u in users if u['tg_id'] == str(tid)), None)
         if not target: await message.answer('⚠️ User not found.'); return
         # Idempotency: build a ref from admin_tg + user_tg + amount + minute-bucket
@@ -2298,7 +2299,8 @@ async def cmd_awdraw(message: Message, session: aiohttp.ClientSession):
                              'Tip: /adminwithdraw &lt;tg_id&gt; to look up username first'); return
     tid, amt = int(parts[1]), float(parts[2])
     try:
-        users  = await bot_api('GET', '/api/admin/users', tg_id=message.from_user.id, session=session)
+        res_u  = await bot_api('GET', '/api/admin/users', tg_id=message.from_user.id, session=session)
+        users  = res_u.get('users', res_u) if isinstance(res_u, dict) else res_u
         target = next((u for u in users if u['tg_id'] == str(tid)), None)
         if not target: await message.answer('⚠️ User not found.'); return
         res = await bot_api('POST', '/api/admin/funds', tg_id=message.from_user.id,
