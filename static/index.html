@@ -1961,6 +1961,12 @@ function showScreen(id) {
     const el = document.getElementById('game-room-footer');
     if (el) el.textContent = S.currentGameId;
   }
+  // Hide the "Created by Benzion Creatives" footer only inside the game screen
+  const footer = document.getElementById('benz-footer');
+  if (footer) {
+    footer.style.display = (id === 'screen-game') ? 'none' : 'block';
+  }
+   
 }
 
 /* ── LOBBY POLLING ── */
