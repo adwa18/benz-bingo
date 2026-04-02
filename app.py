@@ -89,6 +89,8 @@ HOUSE_CUT           = 0.10
 COUNTDOWN_SECS      = 30
 CALL_INTERVAL       = 3
 BET_AMOUNTS         = [10, 20, 50, 100]
+CLAIM_COOLDOWN_SECS = 8      # minimum seconds between BINGO claims per user per game
+MAX_CLAIMS_PER_GAME = 5      # absolute cap on claims a single player can make in one game
 REFERRAL_BONUS      = 20         # ETB per batch
 REFERRALS_PER_BONUS = 10         # new users per batch
 MIN_DEPOSIT      = 50
@@ -98,6 +100,17 @@ PAYMENT_ACCOUNTS = (
     "🏦 <b>CBE:</b>     <code>1000532982565</code>  (Tewodros Ephrem)\n"
     "📱 <b>Telebirr:</b> <code>0913252238</code>  (Tewodros Ephrem)"
 )
+
+# ── Spinning Wheel ────────────────────────────────────────────────────────────
+# Prizes and their weighted chances (index-aligned). Weights sum to 100.
+# 0/5/10/20 are common; 25/30/40/50 are rare.
+WHEEL_PRIZES  = [0,  5,  10, 20, 25, 30, 40, 50]
+WHEEL_WEIGHTS = [30, 25, 20, 15,  4,  3,  2,  1]
+WHEEL_MIN_DEPOSIT = 100   # total ETB deposited to unlock wheel
+WHEEL_MIN_GAMES   = 5     # games played to unlock wheel
+
+# ── Daily Tasks ───────────────────────────────────────────────────────────────
+TASK_MAX_PRIZE = 500      # admin cannot set a task prize above this
 
 # Owner = first admin (or set OWNER_TG_ID env var separately)
 try:
@@ -394,6 +407,23 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_players_game     ON bingo_players(game_id);
             CREATE INDEX IF NOT EXISTS idx_players_user     ON bingo_players(user_id);
             CREATE INDEX IF NOT EXISTS idx_history_user     ON game_history(user_id);
+            CREATE TABLE IF NOT EXISTS daily_tasks (
+                id          SERIAL PRIMARY KEY,
+                title       TEXT NOT NULL,
+                description TEXT,
+                url         TEXT NOT NULL,
+                prize       INTEGER NOT NULL DEFAULT 10,
+                is_active   INTEGER NOT NULL DEFAULT 1,
+                created_by  INTEGER REFERENCES users(id),
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+            CREATE TABLE IF NOT EXISTS task_completions (
+                id           SERIAL PRIMARY KEY,
+                user_id      INTEGER NOT NULL REFERENCES users(id),
+                task_id      INTEGER NOT NULL REFERENCES daily_tasks(id),
+                completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS idx_task_comp ON task_completions(user_id, task_id);
         """
         conn = _get_conn()
         try:
@@ -424,6 +454,21 @@ def init_db():
                 "ALTER TABLE game_history ADD COLUMN IF NOT EXISTS result TEXT NOT NULL DEFAULT 'loss'",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_banned INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE bingo_players ADD COLUMN IF NOT EXISTS picked_number2 INTEGER",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_spin_at DOUBLE PRECISION",
+                """CREATE TABLE IF NOT EXISTS daily_tasks (
+                    id SERIAL PRIMARY KEY, title TEXT NOT NULL,
+                    description TEXT, url TEXT NOT NULL,
+                    prize INTEGER NOT NULL DEFAULT 10,
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    created_by INTEGER, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )""",
+                """CREATE TABLE IF NOT EXISTS task_completions (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users(id),
+                    task_id INTEGER NOT NULL REFERENCES daily_tasks(id),
+                    completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )""",
+                "CREATE INDEX IF NOT EXISTS idx_task_comp ON task_completions(user_id, task_id)",
             ]
             conn2 = _get_conn()
             try:
@@ -502,6 +547,23 @@ def init_db():
                 CREATE INDEX IF NOT EXISTS idx_games_status ON bingo_games(status);
                 CREATE INDEX IF NOT EXISTS idx_players_game ON bingo_players(game_id);
                 CREATE INDEX IF NOT EXISTS idx_history_user ON game_history(user_id);
+                CREATE TABLE IF NOT EXISTS daily_tasks (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title       TEXT NOT NULL,
+                    description TEXT,
+                    url         TEXT NOT NULL,
+                    prize       INTEGER DEFAULT 10,
+                    is_active   INTEGER DEFAULT 1,
+                    created_by  INTEGER,
+                    created_at  TEXT DEFAULT (datetime('now'))
+                );
+                CREATE TABLE IF NOT EXISTS task_completions (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id      INTEGER NOT NULL REFERENCES users(id),
+                    task_id      INTEGER NOT NULL REFERENCES daily_tasks(id),
+                    completed_at TEXT DEFAULT (datetime('now'))
+                );
+                CREATE INDEX IF NOT EXISTS idx_task_comp ON task_completions(user_id, task_id);
             """)
             conn.commit()
             print('[DB] SQLite schema ready.')
@@ -526,18 +588,33 @@ def verify_telegram_init_data(init_data: str):
         pass
     return None
 
+def _is_internal_request() -> bool:
+    """
+    Returns True when the request originates from the bot's loopback calls
+    (bot_api always hits http://127.0.0.1:{PORT}).
+    Also returns True in pure local-dev mode (no BOT_TOKEN set).
+    """
+    return request.remote_addr in ('127.0.0.1', '::1') or not BOT_TOKEN
+
 def get_tg_user_from_request():
+    # ── Primary path: Telegram WebApp cryptographic init-data ──────────────────
     init_data = request.headers.get('X-Telegram-Init-Data', '')
     if init_data and BOT_TOKEN:
         user = verify_telegram_init_data(init_data)
         if user:
             return user
-    dev_hdr = request.headers.get('X-Tg-User', '')
-    if dev_hdr:
-        try:
-            return json.loads(dev_hdr)
-        except Exception:
-            pass
+
+    # ── X-Tg-User is ONLY accepted from the bot's own loopback calls
+    #    (remote_addr == 127.0.0.1) or when running without a BOT_TOKEN (local dev).
+    #    External clients that send this header in production are silently ignored,
+    #    so an attacker cannot impersonate an arbitrary tg_id from the internet.
+    if _is_internal_request():
+        dev_hdr = request.headers.get('X-Tg-User', '')
+        if dev_hdr:
+            try:
+                return json.loads(dev_hdr)
+            except Exception:
+                pass
     return None
 
 def get_current_user():
@@ -728,17 +805,23 @@ def serve_index():
 
 @app.route('/api/debug-auth', methods=['POST'])
 def debug_auth():
-    """Temporary debug endpoint — shows exactly what tg_id the server sees."""
-    body    = request.json or {}
-    tg_user = body.get('tg_user') or get_tg_user_from_request()
+    """
+    Admin-only debug endpoint — diagnoses auth issues.
+    Requires valid admin credentials; never exposes raw tg_user data.
+    """
+    admin, err = require_admin()
+    if err:
+        return err
+    tg_user = get_tg_user_from_request()
     tg_id   = str(tg_user.get('id', '')) if tg_user else 'NO_USER'
     row     = query_db('SELECT id, username, tg_id FROM users WHERE tg_id=?', (tg_id,), one=True)
-    all_ids = [u['tg_id'] for u in query_db('SELECT tg_id FROM users ORDER BY id DESC LIMIT 5')]
+    last_5  = [u['tg_id'] for u in query_db('SELECT tg_id FROM users ORDER BY id DESC LIMIT 5')]
     return jsonify({
-        'seen_tg_id': tg_id,
-        'found_user': row['username'] if row else None,
-        'last_5_tg_ids': all_ids,
-        'tg_user_raw': tg_user,
+        'seen_tg_id':    tg_id,
+        'found_user':    row['username'] if row else None,
+        'last_5_tg_ids': last_5,
+        'is_internal':   _is_internal_request(),
+        'has_init_data': bool(request.headers.get('X-Telegram-Init-Data')),
     })
 
 @app.route('/api/auth', methods=['POST'])
@@ -1182,16 +1265,63 @@ def mark_cell(gid):
         )
     return jsonify({'marked_cells': marked, 'card_id': card_id})
 
+# ── Claim-spam throttle state (in-memory, per user+game) ─────────────────────
+# Keyed by (user_id, game_id).  Values:
+#   _claim_last_ts  → float timestamp of last accepted claim attempt
+#   _claim_counts   → int total claims made this game
+# Entries are tiny and games are short; a lightweight periodic purge is enough.
+_claim_last_ts:  dict = {}
+_claim_counts:   dict = {}
+_claim_state_lock = threading.Lock()
+
+def _purge_claim_state():
+    """Drop entries for games that finished more than 5 minutes ago (best-effort)."""
+    cutoff = time.time() - 300
+    with _claim_state_lock:
+        stale = [k for k, v in _claim_last_ts.items() if v < cutoff]
+        for k in stale:
+            _claim_last_ts.pop(k, None)
+            _claim_counts.pop(k, None)
+
 @app.route('/api/games/<gid>/claim', methods=['POST'])
 def claim_bingo(gid):
     """
     Validate BINGO. If the claim is wrong → kick player (no refund for their bet).
     If correct → pay prize and finish game.
+
+    Spam protection:
+      - A player must wait CLAIM_COOLDOWN_SECS between successive claim attempts.
+      - A player may not make more than MAX_CLAIMS_PER_GAME attempts in one game.
+    Both limits return HTTP 429 so the frontend can display a specific message.
     """
     user, _, err = require_auth()
     if err: return err
     body    = request.json or {}
     card_id = body.get('card_id', 1)   # which card the player is claiming on
+
+    # ── Spam guard (runs OUTSIDE the DB lock — fast path) ─────────────────────
+    claim_key = (user['id'], gid)
+    now_ts    = time.time()
+    _purge_claim_state()          # opportunistic housekeeping
+    with _claim_state_lock:
+        last_ts = _claim_last_ts.get(claim_key, 0.0)
+        elapsed = now_ts - last_ts
+        if elapsed < CLAIM_COOLDOWN_SECS:
+            wait = round(CLAIM_COOLDOWN_SECS - elapsed, 1)
+            return jsonify({
+                'error': f'Please wait {wait}s before claiming again',
+                'retry_after': wait,
+            }), 429
+        count = _claim_counts.get(claim_key, 0)
+        if count >= MAX_CLAIMS_PER_GAME:
+            logger.warning(f'[claim] user {user["id"]} hit MAX_CLAIMS_PER_GAME in {gid}')
+            return jsonify({
+                'error': 'Too many BINGO claims in this game. You have been flagged.',
+            }), 429
+        # Stamp this attempt immediately so concurrent requests are also blocked
+        _claim_last_ts[claim_key] = now_ts
+        _claim_counts[claim_key]  = count + 1
+
     with _db_lock:
         gm = query_db('SELECT * FROM bingo_games WHERE id=?', (gid,), one=True)
         if not gm:
@@ -1221,17 +1351,19 @@ def claim_bingo(gid):
             marked = json.loads(prow['marked_cells'])
         valid = check_bingo(card, marked, called_ints)
         if not valid:
-            # False claim → kick and forfeit their bet (already deducted at join)
-            execute_db(
-                'UPDATE bingo_players SET kicked=1 WHERE id=?', (prow['id'],)
-            )
-            execute_db(
-                'UPDATE users SET games_played=games_played+1 WHERE id=?', (user['id'],)
-            )
-            execute_db(
-                "INSERT INTO game_history (user_id,game_id,bet_amount,prize_won,won,result) VALUES (?,?,?,0,0,'loss')",
-                (user['id'], gid, gm['bet_amount'] * prow.get('bet_paid', 1))
-            )
+            # False claim → kick + stat update + history in ONE atomic transaction.
+            # If any step fails (e.g. DB crash mid-flight) none of the three are
+            # committed, preventing a ghost kick without a history record.
+            execute_many([
+                ('UPDATE bingo_players SET kicked=1 WHERE id=?',
+                 (prow['id'],)),
+                ('UPDATE users SET games_played=games_played+1 WHERE id=?',
+                 (user['id'],)),
+                ("INSERT INTO game_history "
+                 "(user_id,game_id,bet_amount,prize_won,won,result) "
+                 "VALUES (?,?,?,0,0,'loss')",
+                 (user['id'], gid, gm['bet_amount'] * prow.get('bet_paid', 1))),
+            ])
             # Check remaining active players after kick
             remaining = query_db(
                 'SELECT * FROM bingo_players WHERE game_id=? AND kicked=0', (gid,)
@@ -1269,15 +1401,25 @@ def claim_bingo(gid):
              (user['id'], gid, gm['bet_amount'], prize)),
         ])
         losers = query_db(
-            'SELECT user_id FROM bingo_players WHERE game_id=? AND user_id!=? AND kicked=0',
+            'SELECT user_id, bet_paid FROM bingo_players WHERE game_id=? AND user_id!=? AND kicked=0',
             (gid, user['id'])
         )
-        for lo in losers:
-            execute_many([
-                ('UPDATE users SET games_played=games_played+1 WHERE id=?', (lo['user_id'],)),
-                ("INSERT INTO game_history (user_id,game_id,bet_amount,prize_won,won,result) VALUES (?,?,?,0,0,'loss')",
-                 (lo['user_id'], gid, gm['bet_amount'] * lo.get('bet_paid', 1))),
-            ])
+        # Build all loser stat updates + history inserts as a single transaction.
+        # Previously each loser ran its own execute_many — N round-trips.
+        if losers:
+            loser_stmts = []
+            for lo in losers:
+                loser_stmts.append((
+                    'UPDATE users SET games_played=games_played+1 WHERE id=?',
+                    (lo['user_id'],)
+                ))
+                loser_stmts.append((
+                    "INSERT INTO game_history "
+                    "(user_id,game_id,bet_amount,prize_won,won,result) "
+                    "VALUES (?,?,?,0,0,'loss')",
+                    (lo['user_id'], gid, gm['bet_amount'] * lo.get('bet_paid', 1))
+                ))
+            execute_many(loser_stmts)
         fresh = query_db('SELECT * FROM users WHERE id=?', (user['id'],), one=True)
     return jsonify({'winner': True, 'prize': prize, 'user': fresh})
 
@@ -1419,7 +1561,38 @@ def admin_funds():
                 (target['tg_id'], tx_type, amt_abs, tx_ref, f'admin:{admin["id"]}')
             )
         except Exception:
-            pass  # duplicate ref — ignore
+            # Duplicate ref within the 5-minute dedup window — this means the exact
+            # same (type + user + amount) combination was already recorded recently.
+            # Alert every admin so they can investigate before touching the balance again.
+            dup_msg = (
+                f"⚠️ <b>Duplicate Transaction Blocked</b>\n\n"
+                f"Triggering admin: <code>{admin['tg_id']}</code>\n"
+                f"Target user: <b>{target['username']}</b> "
+                f"(TG: <code>{target['tg_id']}</code>)\n"
+                f"Type: <b>{tx_type.upper()}</b>  ·  "
+                f"Amount: <b>{amt_abs:,} ETB</b>\n"
+                f"Dedup ref: <code>{tx_ref}</code>\n\n"
+                f"The same transaction was already recorded in the last 5 minutes. "
+                f"<b>No balance change was applied for this duplicate.</b> "
+                f"Please verify before retrying."
+            )
+            logger.warning(
+                f'[admin_funds] Duplicate tx blocked — ref={tx_ref} '
+                f'user={target["username"]} type={tx_type} amt={amt_abs}'
+            )
+            for aid in ADMIN_TG_IDS_INT:
+                sent = _tg_notify_direct(aid, dup_msg)
+                if not sent:
+                    _notify_queue.put({
+                        'tg_id': aid,
+                        'event': 'custom',
+                        'data':  {'message': dup_msg},
+                    })
+            # Return an explicit error so the admin panel shows it — don't silently succeed
+            return jsonify({
+                'error': 'Duplicate transaction blocked. Admins have been notified.',
+                'duplicate_ref': tx_ref,
+            }), 409
         event = 'deposit_approved' if tx_type == 'deposit' else 'withdraw_approved'
         _notify_queue.put({'tg_id': int(target['tg_id']), 'event': event,
                            'data': {'amount': amt_abs, 'new_balance': new_bal}})
@@ -1547,6 +1720,204 @@ def webapp_withdraw_request():
         f"Account: {phone} ({account_name})\n"
         f"Pending processing. You'll be notified once sent. ✅"}})
     return jsonify({'status': 'submitted'})
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  EARN FEATURES — Spinning Wheel + Daily Tasks
+# ══════════════════════════════════════════════════════════════════════════════
+
+from datetime import datetime as _dt, timezone as _tz
+
+def _is_today(ts) -> bool:
+    """Return True if Unix timestamp ts falls on today's UTC date."""
+    if not ts:
+        return False
+    try:
+        d = _dt.fromtimestamp(float(ts), tz=_tz.utc).date()
+        return d == _dt.now(tz=_tz.utc).date()
+    except Exception:
+        return False
+
+def _total_deposited(tg_id: str) -> int:
+    """Sum of all approved deposit transactions for this user."""
+    row = query_db(
+        "SELECT COALESCE(SUM(amount),0) AS s FROM transactions WHERE tg_id=? AND type='deposit'",
+        (tg_id,), one=True
+    )
+    return int(row['s']) if row else 0
+
+def _task_claimed_today(user_id: int, task_id: int) -> bool:
+    """True if the player already claimed this task today (UTC)."""
+    if DB_TYPE == 'postgres':
+        row = query_db(
+            "SELECT id FROM task_completions WHERE user_id=%s AND task_id=%s "
+            "AND completed_at >= CURRENT_DATE AND completed_at < CURRENT_DATE + INTERVAL '1 day'",
+            (user_id, task_id), one=True
+        )
+    else:
+        row = query_db(
+            "SELECT id FROM task_completions WHERE user_id=? AND task_id=? "
+            "AND date(completed_at) = date('now')",
+            (user_id, task_id), one=True
+        )
+    return bool(row)
+
+# ── Wheel ─────────────────────────────────────────────────────────────────────
+
+@app.route('/api/wheel/status', methods=['GET'])
+def wheel_status():
+    user, _, err = require_auth()
+    if err: return err
+    fresh = query_db('SELECT * FROM users WHERE id=?', (user['id'],), one=True)
+    total_dep  = _total_deposited(fresh['tg_id'])
+    games_ok   = fresh['games_played'] >= WHEEL_MIN_GAMES
+    deposit_ok = total_dep >= WHEEL_MIN_DEPOSIT
+    eligible   = games_ok and deposit_ok
+    spun_today = _is_today(fresh.get('last_spin_at'))
+    reasons    = []
+    if not deposit_ok:
+        reasons.append(f"Deposit at least {WHEEL_MIN_DEPOSIT} ETB total ({total_dep} deposited so far)")
+    if not games_ok:
+        need = WHEEL_MIN_GAMES - fresh['games_played']
+        reasons.append(f"Play {need} more game{'s' if need != 1 else ''} ({fresh['games_played']}/{WHEEL_MIN_GAMES})")
+    # next spin time: midnight UTC
+    now_utc   = _dt.now(tz=_tz.utc)
+    from datetime import timedelta as _td
+    tomorrow  = (now_utc + _td(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    next_spin = int(tomorrow.timestamp()) if spun_today else None
+    return jsonify({
+        'eligible':       eligible,
+        'locked_reasons': reasons,
+        'spun_today':     spun_today,
+        'next_spin_ts':   next_spin,
+        'prizes':         WHEEL_PRIZES,
+        'weights':        WHEEL_WEIGHTS,
+        'total_deposited': total_dep,
+        'games_played':   fresh['games_played'],
+    })
+
+@app.route('/api/wheel/spin', methods=['POST'])
+def wheel_spin():
+    user, _, err = require_auth()
+    if err: return err
+    fresh = query_db('SELECT * FROM users WHERE id=?', (user['id'],), one=True)
+    # Eligibility checks
+    total_dep = _total_deposited(fresh['tg_id'])
+    if total_dep < WHEEL_MIN_DEPOSIT:
+        return jsonify({'error': f'Deposit at least {WHEEL_MIN_DEPOSIT} ETB to unlock the wheel'}), 403
+    if fresh['games_played'] < WHEEL_MIN_GAMES:
+        return jsonify({'error': f'Play at least {WHEEL_MIN_GAMES} games to unlock the wheel'}), 403
+    if _is_today(fresh.get('last_spin_at')):
+        return jsonify({'error': 'You already spun today. Come back tomorrow!'}), 429
+    # Pick prize
+    prize     = random.choices(WHEEL_PRIZES, weights=WHEEL_WEIGHTS, k=1)[0]
+    seg_index = WHEEL_PRIZES.index(prize)
+    now_ts    = time.time()
+    if prize > 0:
+        execute_many([
+            ('UPDATE users SET balance=balance+?, last_spin_at=? WHERE id=?',
+             (prize, now_ts, user['id'])),
+        ])
+    else:
+        execute_db('UPDATE users SET last_spin_at=? WHERE id=?', (now_ts, user['id']))
+    fresh2 = query_db('SELECT balance FROM users WHERE id=?', (user['id'],), one=True)
+    logger.info(f'[wheel] user {user["id"]} spun → {prize} ETB (seg {seg_index})')
+    return jsonify({
+        'prize':       prize,
+        'seg_index':  seg_index,
+        'new_balance': fresh2['balance'],
+    })
+
+# ── Daily Tasks ───────────────────────────────────────────────────────────────
+
+@app.route('/api/tasks', methods=['GET'])
+def list_tasks():
+    user, _, err = require_auth()
+    if err: return err
+    tasks = query_db("SELECT * FROM daily_tasks WHERE is_active=1 ORDER BY created_at DESC")
+    result = []
+    for t in tasks:
+        claimed = _task_claimed_today(user['id'], t['id'])
+        result.append({**t, 'claimed_today': claimed})
+    return jsonify(result)
+
+@app.route('/api/tasks/<int:task_id>/claim', methods=['POST'])
+def claim_task(task_id):
+    user, _, err = require_auth()
+    if err: return err
+    task = query_db('SELECT * FROM daily_tasks WHERE id=? AND is_active=1', (task_id,), one=True)
+    if not task:
+        return jsonify({'error': 'Task not found or inactive'}), 404
+    if _task_claimed_today(user['id'], task_id):
+        return jsonify({'error': 'Already claimed today. Come back tomorrow!'}), 429
+    prize = int(task['prize'])
+    execute_many([
+        ('UPDATE users SET balance=balance+? WHERE id=?', (prize, user['id'])),
+        ('INSERT INTO task_completions (user_id, task_id) VALUES (?,?)', (user['id'], task_id)),
+    ])
+    fresh = query_db('SELECT balance FROM users WHERE id=?', (user['id'],), one=True)
+    logger.info(f'[task] user {user["id"]} claimed task {task_id} → +{prize} ETB')
+    return jsonify({'prize': prize, 'new_balance': fresh['balance']})
+
+# ── Admin: task management ─────────────────────────────────────────────────────
+
+@app.route('/api/admin/tasks', methods=['GET'])
+def admin_list_tasks():
+    admin, err = require_admin()
+    if err: return err
+    tasks = query_db("SELECT * FROM daily_tasks ORDER BY created_at DESC")
+    return jsonify(tasks)
+
+@app.route('/api/admin/tasks', methods=['POST'])
+def admin_create_task():
+    admin, err = require_admin()
+    if err: return err
+    body  = request.json or {}
+    title = str(body.get('title', '')).strip()
+    url   = str(body.get('url', '')).strip()
+    prize = int(body.get('prize', 10))
+    desc  = str(body.get('description', '')).strip()
+    if not title: return jsonify({'error': 'Title required'}), 400
+    if not url:   return jsonify({'error': 'URL required'}), 400
+    if prize < 1 or prize > TASK_MAX_PRIZE:
+        return jsonify({'error': f'Prize must be 1–{TASK_MAX_PRIZE} ETB'}), 400
+    tid = execute_db(
+        'INSERT INTO daily_tasks (title, description, url, prize, created_by) VALUES (?,?,?,?,?)',
+        (title, desc or None, url, prize, admin['id'])
+    )
+    task = query_db('SELECT * FROM daily_tasks WHERE id=?', (tid,), one=True)
+    return jsonify(task), 201
+
+@app.route('/api/admin/tasks/<int:task_id>', methods=['PUT'])
+def admin_update_task(task_id):
+    admin, err = require_admin()
+    if err: return err
+    task = query_db('SELECT * FROM daily_tasks WHERE id=?', (task_id,), one=True)
+    if not task: return jsonify({'error': 'Task not found'}), 404
+    body      = request.json or {}
+    title     = str(body.get('title',       task['title'])).strip()
+    url       = str(body.get('url',         task['url'])).strip()
+    prize     = int(body.get('prize',       task['prize']))
+    desc      = str(body.get('description', task['description'] or '')).strip()
+    is_active = 1 if body.get('is_active', bool(task['is_active'])) else 0
+    if not title: return jsonify({'error': 'Title required'}), 400
+    if not url:   return jsonify({'error': 'URL required'}), 400
+    if prize < 1 or prize > TASK_MAX_PRIZE:
+        return jsonify({'error': f'Prize must be 1–{TASK_MAX_PRIZE} ETB'}), 400
+    execute_db(
+        'UPDATE daily_tasks SET title=?, description=?, url=?, prize=?, is_active=? WHERE id=?',
+        (title, desc or None, url, prize, is_active, task_id)
+    )
+    task = query_db('SELECT * FROM daily_tasks WHERE id=?', (task_id,), one=True)
+    return jsonify(task)
+
+@app.route('/api/admin/tasks/<int:task_id>', methods=['DELETE'])
+def admin_delete_task(task_id):
+    admin, err = require_admin()
+    if err: return err
+    task = query_db('SELECT id FROM daily_tasks WHERE id=?', (task_id,), one=True)
+    if not task: return jsonify({'error': 'Task not found'}), 404
+    execute_db('DELETE FROM daily_tasks WHERE id=?', (task_id,))
+    return jsonify({'deleted': task_id})
 
 @app.route('/health')
 def health():
