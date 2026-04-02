@@ -196,6 +196,46 @@ body::before {
 .nav-lbl { font-size:9px; font-weight:700; letter-spacing:.8px; text-transform:uppercase; font-family:'Exo 2',sans-serif; }
 
 /* ══ CARDS / PANELS ═════════════════════════════════════ */
+/* ══ SCREEN: EARN  ═══════════════════════════════════════════════════════════ */
+.earn-section-title {
+  font-family:'Audiowide',sans-serif; font-size:12px; color:var(--cyan);
+  letter-spacing:1px; text-transform:uppercase; margin-bottom:12px;
+  display:flex; align-items:center; gap:6px;
+}
+.wheel-outer { display:flex; flex-direction:column; align-items:center; gap:8px; margin:4px 0 14px; }
+.wheel-pointer { font-size:24px; line-height:1; color:var(--pink); text-shadow:var(--glow-p); margin-bottom:-4px; z-index:2; }
+#wheel-spinner { will-change:transform; border-radius:50%; box-shadow:0 0 28px rgba(0,229,255,.18),0 0 56px rgba(0,229,255,.07); }
+.wheel-result-badge { font-family:'Audiowide',sans-serif; font-size:22px; color:var(--green); text-shadow:var(--glow-g); animation:num-pop .5s ease-out forwards; text-align:center; }
+.wheel-zero-badge   { font-family:'Audiowide',sans-serif; font-size:16px; color:var(--text3); text-align:center; }
+.wheel-locked-box   { background:rgba(255,45,120,.06); border:1px solid var(--pink2); border-radius:10px; padding:14px 16px; margin-bottom:12px; }
+.wheel-locked-box .lock-icon  { font-size:28px; text-align:center; margin-bottom:6px; }
+.wheel-locked-box .lock-title { font-family:'Audiowide',sans-serif; font-size:13px; color:var(--pink); text-align:center; margin-bottom:10px; }
+.wheel-req { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--text2); margin-bottom:6px; }
+.wheel-req .req-ok { color:var(--green); }
+.wheel-req .req-no { color:var(--red); }
+.wheel-cooldown { font-size:11px; color:var(--text3); text-align:center; padding:6px 0 4px; font-family:'Share Tech Mono',monospace; }
+.prize-pills { display:flex; flex-wrap:wrap; gap:4px; justify-content:center; margin-bottom:10px; }
+.prize-pill { font-family:'Share Tech Mono',monospace; font-size:10px; padding:2px 8px; border-radius:99px; border:1px solid var(--border2); color:var(--text3); background:var(--surf2); }
+.prize-pill.common { border-color:var(--cyan3); color:var(--cyan); }
+.prize-pill.rare   { border-color:rgba(255,179,0,.4); color:var(--amber); }
+.task-item { background:var(--surf2); border:1px solid var(--border2); border-radius:10px; padding:12px 14px; margin-bottom:8px; display:flex; align-items:center; gap:12px; transition:border-color .2s; }
+.task-item.claimed { opacity:.5; filter:grayscale(.5); }
+.task-icon  { font-size:22px; flex-shrink:0; width:36px; text-align:center; }
+.task-info  { flex:1; min-width:0; }
+.task-title { font-size:13px; font-weight:600; color:var(--text); margin-bottom:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.task-desc  { font-size:11px; color:var(--text3); margin-bottom:4px; }
+.task-prize { font-family:'Share Tech Mono',monospace; font-size:12px; color:var(--amber); }
+.task-actions { display:flex; flex-direction:column; gap:4px; flex-shrink:0; min-width:62px; }
+.task-go-btn,.task-claim-btn { padding:6px 10px; font-size:11px; }
+.task-claim-btn:disabled { opacity:.4; }
+.task-countdown { font-size:9px; color:var(--text3); text-align:center; margin-top:2px; font-family:'Share Tech Mono',monospace; }
+.admin-task-row { display:flex; align-items:flex-start; gap:8px; padding:8px 0; border-bottom:1px solid var(--border); }
+.admin-task-row:last-child { border-bottom:none; }
+.admin-task-info  { flex:1; min-width:0; }
+.admin-task-title { font-size:12px; font-weight:600; color:var(--text); }
+.admin-task-meta  { font-size:10px; color:var(--text3); margin-top:2px; }
+.admin-task-badge-on  { background:rgba(0,230,118,.12); border:1px solid var(--green2); color:var(--green); border-radius:4px; font-size:9px; padding:1px 6px; }
+.admin-task-badge-off { background:rgba(255,61,87,.1);  border:1px solid var(--red);    color:var(--red);   border-radius:4px; font-size:9px; padding:1px 6px; }
 .panel {
   background:var(--surf);
   border:1px solid var(--border);
@@ -1628,6 +1668,40 @@ body::before {
     </div>
 
     <!-- ADMIN -->
+    <!-- EARN -->
+    <div class="screen" id="screen-earn">
+      <div class="screen-title">◈ EARN FREE ETB</div>
+
+      <!-- ── Spinning Wheel ── -->
+      <div class="panel panel-pink fade-in" style="margin-bottom:12px">
+        <div class="earn-section-title">🎡 Daily Spin Wheel</div>
+        <div id="wheel-locked-box" class="wheel-locked-box" style="display:none">
+          <div class="lock-icon">🔒</div>
+          <div class="lock-title">Wheel Locked</div>
+          <div id="wheel-lock-reasons"></div>
+        </div>
+        <div id="wheel-section" style="display:none">
+          <div class="prize-pills" id="wheel-prize-pills"></div>
+          <div class="wheel-outer">
+            <div class="wheel-pointer">▼</div>
+            <div id="wheel-spinner"><canvas id="wheel-canvas" width="260" height="260"></canvas></div>
+          </div>
+          <div id="wheel-result-area" style="min-height:30px;margin:6px 0"></div>
+          <div id="wheel-status-msg" class="wheel-cooldown"></div>
+          <button id="spin-btn" class="btn btn-pink btn-full" onclick="doSpin()">🎡 SPIN THE WHEEL</button>
+        </div>
+      </div>
+
+      <!-- ── Daily Tasks ── -->
+      <div class="panel fade-in">
+        <div class="earn-section-title">📋 Daily Tasks</div>
+        <p style="font-size:11px;color:var(--text3);margin-bottom:12px">
+          Complete tasks below to earn free ETB. Each task can only be claimed once.
+        </p>
+        <div id="tasks-list"><div class="empty">Loading…</div></div>
+      </div>
+    </div>
+
     <div class="screen" id="screen-admin">
       <div class="screen-title">⚙️ ADMIN</div>
       <div class="panel fade-in">
@@ -1665,6 +1739,25 @@ body::before {
         </div>
         <div id="admin-users-list"></div>
       </div>
+      <!-- Tasks Management Panel -->
+      <div class="panel fade-in" id="admin-tasks-panel">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <div class="label">Daily Tasks</div>
+          <button class="btn btn-cyan btn-sm" onclick="showAdminTaskForm(null)">+ New</button>
+        </div>
+        <div id="admin-task-form" style="display:none;background:var(--surf2);border:1px solid var(--border2);border-radius:8px;padding:12px;margin-bottom:12px">
+          <input  class="input" id="atf-title" placeholder="Title  e.g. Follow our Telegram channel" style="margin-bottom:6px">
+          <input  class="input" id="atf-desc"  placeholder="Short description (optional)"             style="margin-bottom:6px">
+          <input  class="input" id="atf-url"   placeholder="Link  https://t.me/…"                    style="margin-bottom:6px">
+          <input  class="input" id="atf-prize" type="number" min="1" max="500" placeholder="Prize ETB (1–500)" style="margin-bottom:6px">
+          <input type="hidden" id="atf-id" value="">
+          <div style="display:flex;gap:6px">
+            <button class="btn btn-cyan  btn-full btn-sm" onclick="adminSaveTask()">💾 Save</button>
+            <button class="btn btn-ghost btn-full btn-sm" onclick="hideAdminTaskForm()">Cancel</button>
+          </div>
+        </div>
+        <div id="admin-tasks-list"><div class="empty">No tasks yet.</div></div>
+      </div>
     </div>
 
   </div><!-- /screens -->
@@ -1679,6 +1772,9 @@ body::before {
     </button>
     <button class="nav-btn" id="nav-ranks" onclick="navToRanks()">
       <span class="nav-ico">🏆</span><span class="nav-lbl">Ranks</span>
+    </button>
+    <button class="nav-btn" id="nav-earn" onclick="navToEarn()">
+      <span class="nav-ico">🎡</span><span class="nav-lbl">Earn</span>
     </button>
     <button class="nav-btn" id="nav-history" onclick="navToHistory()">
       <span class="nav-ico">📜</span><span class="nav-lbl">History</span>
@@ -2929,7 +3025,7 @@ function shareReferralTelegram() {
 
 /* ── ADMIN ── */
 async function loadAdmin() {
-  loadAdminStats(); loadAdminGames(); loadAdminUsers();
+  loadAdminStats(); loadAdminGames(); loadAdminUsers(); loadAdminTasks();
   const adminCard = document.getElementById('admin-manage-admins-card');
   if (adminCard) adminCard.style.display = S.user?.is_owner ? 'block' : 'none';
 }
@@ -3121,6 +3217,493 @@ function spawnConfetti() {
 function copyText(txt, label) {
   if (navigator.clipboard) navigator.clipboard.writeText(txt).then(()=>toast(`${label} copied!`,'success'));
   else toast(txt,'info');
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   EARN SCREEN — Spinning Wheel + Daily Tasks
+════════════════════════════════════════════════════════════════════════════ */
+
+/* ── Nav ── */
+function navToEarn() {
+  if (_inGame) { toast('Leave the game first', 'error'); return; }
+  loadEarnScreen();
+  showScreen('screen-earn');
+  setActiveNav('nav-earn');
+}
+
+/* ════════════════ SPINNING WHEEL ════════════════════════════════════════ */
+
+/* Prize config — mirrors backend WHEEL_PRIZES / WHEEL_WEIGHTS */
+const W_PRIZES  = [0, 5, 10, 20, 25, 30, 40, 50];
+/* Visual style per segment */
+const W_SEGS = [
+  // label       bg          glow/arc         textColor   textShadow
+  { label:'TRY\nAGAIN', bg:'#0a0a14', arc:'#1f1f35', text:'#50507a', shadow:'' },
+  { label:'5\nETB',     bg:'#001e28', arc:'#00b8d4', text:'#00e5ff', shadow:'0 0 10px #00e5ff' },
+  { label:'10\nETB',    bg:'#001a0e', arc:'#00a843', text:'#00e676', shadow:'0 0 10px #00e676' },
+  { label:'20\nETB',    bg:'#1c1400', arc:'#cc9900', text:'#ffb300', shadow:'0 0 10px #ffb300' },
+  { label:'25\nETB',    bg:'#1c0a00', arc:'#cc5500', text:'#ff8c00', shadow:'0 0 12px #ff8c00' },
+  { label:'30\nETB',    bg:'#1c0018', arc:'#c2195a', text:'#ff2d78', shadow:'0 0 12px #ff2d78' },
+  { label:'40\nETB',    bg:'#140020', arc:'#7c38cc', text:'#c06aff', shadow:'0 0 14px #c06aff' },
+  { label:'50\nETB',    bg:'#1c1400', arc:'#ccaa00', text:'#ffd700', shadow:'0 0 16px #ffd700' },
+];
+
+let _wheelRot = 0;
+let _spinning = false;
+
+function drawWheel(highlightSeg = -1) {
+  const canvas = document.getElementById('wheel-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const cx = W / 2, cy = H / 2;
+  const R  = cx - 8;         // outer radius
+  const n  = W_SEGS.length;
+  const segAng = (2 * Math.PI) / n;
+  const baseStart = -Math.PI / 2 - segAng / 2;  // seg 0 centred at top
+
+  ctx.clearRect(0, 0, W, H);
+
+  W_SEGS.forEach((seg, i) => {
+    const s = baseStart + i * segAng;
+    const e = s + segAng;
+    const mid = s + segAng / 2;
+    const isHi = i === highlightSeg;
+
+    /* filled wedge */
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, R, s, e);
+    ctx.closePath();
+    if (isHi) {
+      const grd = ctx.createRadialGradient(cx, cy, R * 0.3, cx, cy, R);
+      grd.addColorStop(0, seg.bg);
+      grd.addColorStop(1, seg.arc + '55');
+      ctx.fillStyle = grd;
+    } else {
+      ctx.fillStyle = seg.bg;
+    }
+    ctx.fill();
+
+    /* arc rim glow */
+    ctx.beginPath();
+    ctx.arc(cx, cy, R - 1, s + 0.06, e - 0.06);
+    ctx.strokeStyle = isHi ? seg.text : seg.arc;
+    ctx.lineWidth   = isHi ? 4 : 2;
+    ctx.shadowColor = isHi ? seg.text : 'transparent';
+    ctx.shadowBlur  = isHi ? 12 : 0;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    /* divider lines */
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    const dx = Math.cos(s) * R, dy = Math.sin(s) * R;
+    ctx.lineTo(cx + dx, cy + dy);
+    ctx.strokeStyle = '#1f1f35';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    /* prize label — two lines (value + ETB) */
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(mid);
+    const labelLines = seg.label.split('\n');
+    const textR = R * 0.68;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    if (seg.shadow) {
+      ctx.shadowColor = seg.text;
+      ctx.shadowBlur  = isHi ? 16 : 8;
+    }
+    /* top line (number) */
+    ctx.font = `bold ${i === 0 ? 11 : 15}px 'Audiowide', sans-serif`;
+    ctx.fillStyle = seg.text;
+    ctx.fillText(labelLines[0], textR, labelLines[1] ? -7 : 0);
+    /* bottom line (ETB / label) */
+    if (labelLines[1]) {
+      ctx.font = `bold 9px 'Share Tech Mono', monospace`;
+      ctx.fillStyle = seg.text + 'cc';
+      ctx.shadowBlur = 0;
+      ctx.fillText(labelLines[1], textR, 7);
+    }
+    ctx.restore();
+  });
+
+  /* outer border ring */
+  ctx.beginPath();
+  ctx.arc(cx, cy, R, 0, 2 * Math.PI);
+  ctx.strokeStyle = '#2a2a48';
+  ctx.lineWidth = 2;
+  ctx.shadowColor = '#00e5ff';
+  ctx.shadowBlur = 6;
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  /* centre hub */
+  const hubR = 22;
+  const hGrd = ctx.createRadialGradient(cx, cy, 0, cx, cy, hubR);
+  hGrd.addColorStop(0, '#1a1a2e');
+  hGrd.addColorStop(1, '#0d0d18');
+  ctx.beginPath();
+  ctx.arc(cx, cy, hubR, 0, 2 * Math.PI);
+  ctx.fillStyle = hGrd;
+  ctx.fill();
+  ctx.strokeStyle = '#00e5ff';
+  ctx.lineWidth = 2;
+  ctx.shadowColor = '#00e5ff';
+  ctx.shadowBlur = 10;
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  /* centre dot */
+  ctx.beginPath();
+  ctx.arc(cx, cy, 6, 0, 2 * Math.PI);
+  ctx.fillStyle = '#00e5ff';
+  ctx.shadowColor = '#00e5ff';
+  ctx.shadowBlur = 8;
+  ctx.fill();
+  ctx.shadowBlur = 0;
+}
+
+function spinWheelTo(segIdx, onDone) {
+  const perSeg = 360 / W_SEGS.length;
+  const curOff = _wheelRot % 360;
+  const target = segIdx * perSeg;
+  let delta = target - curOff;
+  if (delta <= 0) delta += 360;
+  _wheelRot += 6 * 360 + delta;
+  const spinner = document.getElementById('wheel-spinner');
+  spinner.style.transition = 'transform 4.5s cubic-bezier(0.17,0.67,0.10,0.99)';
+  spinner.style.transform  = `rotate(${_wheelRot}deg)`;
+  setTimeout(() => {
+    drawWheel(segIdx);
+    if (onDone) onDone();
+  }, 4600);
+}
+
+/* ── Load earn screen ── */
+async function loadEarnScreen() {
+  drawWheel();
+  loadWheelStatus();
+  loadTasks();
+}
+
+async function loadWheelStatus() {
+  try {
+    const st = await api('GET', '/api/wheel/status');
+    renderWheelStatus(st);
+  } catch(_) {}
+}
+
+function renderWheelStatus(st) {
+  const lockedBox  = document.getElementById('wheel-locked-box');
+  const wheelSec   = document.getElementById('wheel-section');
+  const spinBtn    = document.getElementById('spin-btn');
+  const statusMsg  = document.getElementById('wheel-status-msg');
+  const resultArea = document.getElementById('wheel-result-area');
+  if (!lockedBox || !wheelSec) return;
+
+  /* prize pills */
+  const pillsEl = document.getElementById('wheel-prize-pills');
+  if (pillsEl && st.prizes) {
+    const common = [0, 5, 10, 20];
+    pillsEl.innerHTML = st.prizes.map(p => {
+      const cls = common.includes(p) ? 'common' : 'rare';
+      return `<span class="prize-pill ${cls}">${p === 0 ? 'Try Again' : p + ' ETB'}</span>`;
+    }).join('');
+  }
+
+  if (!st.eligible) {
+    lockedBox.style.display = 'block';
+    wheelSec.style.display  = 'none';
+    const reas = document.getElementById('wheel-lock-reasons');
+    if (reas) reas.innerHTML = (st.locked_reasons || []).map(r =>
+      `<div class="wheel-req"><span class="req-no">✗</span><span>${r}</span></div>`
+    ).join('');
+    return;
+  }
+
+  lockedBox.style.display = 'none';
+  wheelSec.style.display  = 'block';
+
+  if (st.spun_today) {
+    spinBtn.disabled    = true;
+    spinBtn.textContent = '✓ Already Spun Today';
+    if (st.next_spin_ts) startSpinCountdown(st.next_spin_ts, statusMsg);
+    if (resultArea) resultArea.innerHTML = '';
+  } else {
+    spinBtn.disabled    = false;
+    spinBtn.innerHTML   = '🎡 SPIN THE WHEEL';
+    if (statusMsg) statusMsg.textContent = '1 free spin available today!';
+    if (resultArea) resultArea.innerHTML = '';
+  }
+}
+
+let _spinCdTimer = null;
+function startSpinCountdown(nextTs, el) {
+  if (_spinCdTimer) clearInterval(_spinCdTimer);
+  function tick() {
+    const diff = Math.max(0, nextTs - Math.floor(Date.now() / 1000));
+    if (!diff) { clearInterval(_spinCdTimer); if (el) el.textContent = 'Spin ready!'; return; }
+    const h = Math.floor(diff/3600), m = Math.floor((diff%3600)/60), s = diff%60;
+    if (el) el.textContent =
+      `Next spin in ${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  }
+  tick();
+  _spinCdTimer = setInterval(tick, 1000);
+}
+
+async function doSpin() {
+  if (_spinning) return;
+  const spinBtn    = document.getElementById('spin-btn');
+  const resultArea = document.getElementById('wheel-result-area');
+  _spinning = true;
+  spinBtn.disabled    = true;
+  spinBtn.textContent = 'Spinning…';
+  if (resultArea) resultArea.innerHTML = '';
+  try {
+    const res = await api('POST', '/api/wheel/spin');
+    spinWheelTo(res.seg_index, () => {
+      _spinning = false;
+      S.user = { ...S.user, balance: res.new_balance };
+      renderHeader();
+      if (resultArea) {
+        if (res.prize > 0) {
+          resultArea.innerHTML = `<div class="wheel-result-badge">🎉 +${res.prize} ETB!</div>`;
+          spawnConfetti();
+          toast(`You won ${res.prize} ETB!`, 'success');
+        } else {
+          resultArea.innerHTML = `<div class="wheel-zero-badge">😅 Better luck tomorrow!</div>`;
+          toast('No prize this time — try again tomorrow', 'info');
+        }
+      }
+      loadWheelStatus();
+    });
+  } catch(e) {
+    _spinning = false;
+    spinBtn.disabled  = false;
+    spinBtn.innerHTML = '🎡 SPIN THE WHEEL';
+    if (e.message && e.message.toLowerCase().includes('already')) {
+      toast(e.message, 'info');
+      loadWheelStatus();
+    } else {
+      toast(e.message || 'Spin failed', 'error');
+    }
+  }
+}
+
+/* ════════════════ DAILY TASKS ═══════════════════════════════════════════ */
+/*
+  Smart verification (Fix D):
+  - When player taps "Go →", we record open_ts in sessionStorage keyed by task id.
+  - The Claim button only enables after MIN_VERIFY_SECS seconds have elapsed.
+  - On submit, open_ts is sent to the backend which re-validates the gap server-side.
+  - This prevents: (a) direct API claims with no link visit, (b) instant tap-claim,
+    (c) replaying old tokens (each open_ts is validated within the current day only).
+*/
+const MIN_VERIFY_SECS = 45;    // seconds player must spend before claiming
+let _taskTimers = {};
+
+async function loadTasks() {
+  const el = document.getElementById('tasks-list');
+  if (!el) return;
+  el.innerHTML = '<div class="empty">Loading…</div>';
+  try {
+    const tasks = await api('GET', '/api/tasks');
+    if (!tasks.length) {
+      el.innerHTML = '<div class="empty" style="padding:20px 0">No tasks available right now.<br>Check back soon!</div>';
+      return;
+    }
+    el.innerHTML = tasks.map(t => buildTaskHTML(t)).join('');
+    // Restore any in-progress countdowns from this session
+    tasks.forEach(t => {
+      if (!t.completed) {
+        const stored = sessionStorage.getItem(`task_open_${t.id}`);
+        if (stored) {
+          const elapsed = Math.floor(Date.now() / 1000) - parseInt(stored);
+          if (elapsed < MIN_VERIFY_SECS) {
+            startVerifyCountdown(t.id, MIN_VERIFY_SECS - elapsed);
+          } else {
+            enableClaimBtn(t.id);
+          }
+        }
+      }
+    });
+  } catch(e) {
+    el.innerHTML = '<div class="empty">Error loading tasks.</div>';
+  }
+}
+
+function buildTaskHTML(t) {
+  const done    = !!t.completed;
+  const icons   = ['👆','❤️','🔔','👥','📣','⭐','🎯','🔗'];
+  const icon    = icons[t.id % icons.length];
+
+  return `
+  <div class="task-item${done ? ' claimed' : ''}" id="task-item-${t.id}">
+    <div class="task-icon">${icon}</div>
+    <div class="task-info">
+      <div class="task-title">${t.title}</div>
+      ${t.description ? `<div class="task-desc">${t.description}</div>` : ''}
+      <div class="task-prize">${done ? '✓ Claimed' : `+${t.prize} ETB`}</div>
+    </div>
+    <div class="task-actions">
+      ${!done ? `<button class="btn btn-ghost task-go-btn btn-sm"
+        onclick="openTaskLink(${t.id},'${encodeURIComponent(t.url)}')">Go →</button>` : ''}
+      <button class="btn btn-amber task-claim-btn btn-sm" id="claim-btn-${t.id}"
+        onclick="claimTask(${t.id})" ${done ? 'disabled' : 'disabled'}>
+        ${done ? '✓ Done' : `+${t.prize} ETB`}
+      </button>
+      <div class="task-countdown" id="task-cd-${t.id}">
+        ${done ? '' : 'Tap Go → first'}
+      </div>
+    </div>
+  </div>`;
+}
+
+function openTaskLink(taskId, encodedUrl) {
+  const url = decodeURIComponent(encodedUrl);
+  /* Record the moment the player opened the link */
+  const nowSec = Math.floor(Date.now() / 1000);
+  sessionStorage.setItem(`task_open_${taskId}`, String(nowSec));
+
+  if (window.Telegram?.WebApp?.openLink) {
+    window.Telegram.WebApp.openLink(url);
+  } else {
+    window.open(url, '_blank');
+  }
+  startVerifyCountdown(taskId, MIN_VERIFY_SECS);
+}
+
+function startVerifyCountdown(taskId, secsLeft) {
+  const cdEl  = document.getElementById(`task-cd-${taskId}`);
+  const btn   = document.getElementById(`claim-btn-${taskId}`);
+  if (_taskTimers[taskId]) clearInterval(_taskTimers[taskId]);
+  let remaining = secsLeft;
+  function tick() {
+    if (remaining <= 0) {
+      clearInterval(_taskTimers[taskId]);
+      delete _taskTimers[taskId];
+      enableClaimBtn(taskId);
+      if (cdEl) cdEl.textContent = 'Ready to claim!';
+      return;
+    }
+    if (cdEl) cdEl.textContent = `Wait ${remaining}s…`;
+    remaining--;
+  }
+  tick();
+  _taskTimers[taskId] = setInterval(tick, 1000);
+}
+
+function enableClaimBtn(taskId) {
+  const btn  = document.getElementById(`claim-btn-${taskId}`);
+  const cdEl = document.getElementById(`task-cd-${taskId}`);
+  if (btn)  { btn.disabled = false; }
+  if (cdEl) { cdEl.textContent = 'Ready to claim!'; }
+}
+
+async function claimTask(taskId) {
+  const btn   = document.getElementById(`claim-btn-${taskId}`);
+  /* Client-side: read the open_ts we stored when they clicked Go */
+  const openTs = sessionStorage.getItem(`task_open_${taskId}`);
+  if (!openTs) {
+    toast('Tap "Go →" first to visit the page!', 'error'); return;
+  }
+  if (btn) btn.disabled = true;
+  try {
+    /* Send open_ts to backend — it validates the time gap server-side */
+    const res = await api('POST', `/api/tasks/${taskId}/claim`, { open_ts: parseInt(openTs) });
+    sessionStorage.removeItem(`task_open_${taskId}`);
+    S.user = { ...S.user, balance: res.new_balance };
+    renderHeader();
+    toast(`+${res.prize} ETB earned!`, 'success');
+    loadTasks();
+  } catch(e) {
+    if (btn) btn.disabled = false;
+    const msg = e.message || 'Claim failed';
+    toast(msg, 'error');
+    if (msg.toLowerCase().includes('already')) loadTasks();
+  }
+}
+
+/* ── Admin Tasks ── */
+async function loadAdminTasks() {
+  const el = document.getElementById('admin-tasks-list');
+  if (!el) return;
+  el.innerHTML = '<div class="empty">Loading…</div>';
+  try {
+    const tasks = await api('GET', '/api/admin/tasks');
+    if (!tasks.length) { el.innerHTML = '<div class="empty">No tasks yet.</div>'; return; }
+    el.innerHTML = tasks.map(t => `
+      <div class="admin-task-row">
+        <div class="admin-task-info">
+          <div class="admin-task-title">${t.title}
+            <span class="${t.is_active ? 'admin-task-badge-on' : 'admin-task-badge-off'}">
+              ${t.is_active ? 'ON' : 'OFF'}
+            </span>
+          </div>
+          <div class="admin-task-meta">${t.prize} ETB &nbsp;·&nbsp;
+            <a href="${t.url}" style="color:var(--cyan3)" target="_blank">${t.url.length > 35 ? t.url.slice(0,35)+'…' : t.url}</a>
+          </div>
+        </div>
+        <div style="display:flex;gap:4px;flex-shrink:0">
+          <button class="btn btn-ghost btn-sm" onclick='showAdminTaskForm(${JSON.stringify(t)})'>✏️</button>
+          <button class="btn btn-ghost btn-sm"
+            style="border-color:${t.is_active ? 'var(--red)' : 'var(--green)'};color:${t.is_active ? 'var(--red)' : 'var(--green)'}"
+            onclick="adminToggleTask(${t.id},${t.is_active ? 0 : 1})">${t.is_active ? 'Off' : 'On'}</button>
+          <button class="btn btn-danger btn-sm" onclick="adminDeleteTask(${t.id})">🗑</button>
+        </div>
+      </div>`).join('');
+  } catch(e) { el.innerHTML = '<div class="empty">Error loading.</div>'; }
+}
+
+function showAdminTaskForm(task) {
+  const form = document.getElementById('admin-task-form');
+  if (!form) return;
+  form.style.display = 'block';
+  document.getElementById('atf-title').value = task?.title       || '';
+  document.getElementById('atf-desc').value  = task?.description || '';
+  document.getElementById('atf-url').value   = task?.url         || '';
+  document.getElementById('atf-prize').value = task?.prize       || '';
+  document.getElementById('atf-id').value    = task?.id          || '';
+}
+function hideAdminTaskForm() {
+  const form = document.getElementById('admin-task-form');
+  if (form) form.style.display = 'none';
+  ['atf-title','atf-desc','atf-url','atf-prize','atf-id'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.value = '';
+  });
+}
+async function adminSaveTask() {
+  const id   = document.getElementById('atf-id').value;
+  const body = {
+    title:       document.getElementById('atf-title').value.trim(),
+    description: document.getElementById('atf-desc').value.trim(),
+    url:         document.getElementById('atf-url').value.trim(),
+    prize:       parseInt(document.getElementById('atf-prize').value) || 0,
+  };
+  if (!body.title || !body.url || !body.prize) {
+    toast('Title, URL and prize are required', 'error'); return;
+  }
+  try {
+    if (id) { await api('PUT',  `/api/admin/tasks/${id}`, body); toast('Task updated', 'success'); }
+    else    { await api('POST', '/api/admin/tasks',        body); toast('Task created', 'success'); }
+    hideAdminTaskForm();
+    loadAdminTasks();
+  } catch(e) { toast(e.message || 'Error', 'error'); }
+}
+async function adminToggleTask(id, active) {
+  try { await api('PUT', `/api/admin/tasks/${id}`, { is_active: active }); loadAdminTasks(); }
+  catch(e) { toast(e.message || 'Error', 'error'); }
+}
+async function adminDeleteTask(id) {
+  if (!confirm('Delete this task permanently?')) return;
+  try {
+    await api('DELETE', `/api/admin/tasks/${id}`);
+    toast('Task deleted', 'success');
+    loadAdminTasks();
+  } catch(e) { toast(e.message || 'Error', 'error'); }
 }
 </script>
 </body>
