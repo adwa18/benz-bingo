@@ -1745,20 +1745,14 @@ def _total_deposited(tg_id: str) -> int:
     )
     return int(row['s']) if row else 0
 
-def _task_claimed_today(user_id: int, task_id: int) -> bool:
-    """True if the player already claimed this task today (UTC)."""
-    if DB_TYPE == 'postgres':
-        row = query_db(
-            "SELECT id FROM task_completions WHERE user_id=%s AND task_id=%s "
-            "AND completed_at >= CURRENT_DATE AND completed_at < CURRENT_DATE + INTERVAL '1 day'",
-            (user_id, task_id), one=True
-        )
-    else:
-        row = query_db(
-            "SELECT id FROM task_completions WHERE user_id=? AND task_id=? "
-            "AND date(completed_at) = date('now')",
-            (user_id, task_id), one=True
-        )
+MIN_TASK_VERIFY_SECS = 40   # seconds that must pass between link-open and claim
+
+def _task_completed_ever(user_id: int, task_id: int) -> bool:
+    """True if the player has EVER completed this task (one-time only, no daily reset)."""
+    row = query_db(
+        'SELECT id FROM task_completions WHERE user_id=? AND task_id=?',
+        (user_id, task_id), one=True
+    )
     return bool(row)
 
 # ── Wheel ─────────────────────────────────────────────────────────────────────
@@ -1836,26 +1830,66 @@ def list_tasks():
     tasks = query_db("SELECT * FROM daily_tasks WHERE is_active=1 ORDER BY created_at DESC")
     result = []
     for t in tasks:
-        claimed = _task_claimed_today(user['id'], t['id'])
-        result.append({**t, 'claimed_today': claimed})
+        # 'completed' = ever completed (one-time, permanent)
+        completed = _task_completed_ever(user['id'], t['id'])
+        result.append({**t, 'completed': completed, 'claimed_today': completed})
     return jsonify(result)
 
 @app.route('/api/tasks/<int:task_id>/claim', methods=['POST'])
 def claim_task(task_id):
+    """
+    Claim a completed task.
+    Fix C: Tasks are one-time only — claimed once, never again (no daily reset).
+    Fix D: Smart verification — client sends open_ts (Unix timestamp when they
+           tapped 'Go →'). Backend enforces that MIN_TASK_VERIFY_SECS have elapsed,
+           preventing instant tap-claim without visiting the link.
+           open_ts must also be within the last 24 hours to block replayed tokens.
+    """
     user, _, err = require_auth()
     if err: return err
+    body    = request.json or {}
+    open_ts = body.get('open_ts')
+
     task = query_db('SELECT * FROM daily_tasks WHERE id=? AND is_active=1', (task_id,), one=True)
     if not task:
         return jsonify({'error': 'Task not found or inactive'}), 404
-    if _task_claimed_today(user['id'], task_id):
-        return jsonify({'error': 'Already claimed today. Come back tomorrow!'}), 429
+
+    # Fix C: one-time check
+    if _task_completed_ever(user['id'], task_id):
+        return jsonify({'error': 'You have already completed this task!'}), 429
+
+    # Fix D: server-side link-open verification
+    now_ts = time.time()
+    if open_ts is None:
+        return jsonify({
+            'error': 'Visit the task link first by tapping "Go →", then wait before claiming.'
+        }), 400
+    try:
+        open_ts = float(open_ts)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Invalid verification token'}), 400
+    elapsed = now_ts - open_ts
+    if elapsed < MIN_TASK_VERIFY_SECS:
+        wait = round(MIN_TASK_VERIFY_SECS - elapsed, 0)
+        return jsonify({
+            'error': f'Please wait {int(wait)} more second(s) after opening the link before claiming.',
+            'retry_after': int(wait),
+        }), 429
+    if elapsed > 86400:   # token older than 24 hours — stale / replayed
+        return jsonify({
+            'error': 'Your session has expired. Tap "Go →" again to restart.',
+        }), 400
+
     prize = int(task['prize'])
     execute_many([
         ('UPDATE users SET balance=balance+? WHERE id=?', (prize, user['id'])),
         ('INSERT INTO task_completions (user_id, task_id) VALUES (?,?)', (user['id'], task_id)),
     ])
     fresh = query_db('SELECT balance FROM users WHERE id=?', (user['id'],), one=True)
-    logger.info(f'[task] user {user["id"]} claimed task {task_id} → +{prize} ETB')
+    logger.info(
+        f'[task] user {user["id"]} claimed task {task_id} → +{prize} ETB '
+        f'(elapsed={elapsed:.0f}s after link open)'
+    )
     return jsonify({'prize': prize, 'new_balance': fresh['balance']})
 
 # ── Admin: task management ─────────────────────────────────────────────────────
