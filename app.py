@@ -102,12 +102,17 @@ PAYMENT_ACCOUNTS = (
 )
 
 # ── Spinning Wheel ────────────────────────────────────────────────────────────
-# Prizes and their weighted chances (index-aligned). Weights sum to 100.
-# 0/5/10/20 are common; 25/30/40/50 are rare.
-WHEEL_PRIZES  = [0,  5,  10, 20, 25, 30, 40, 50]
-WHEEL_WEIGHTS = [30, 25, 20, 15,  4,  3,  2,  1]
-WHEEL_MIN_DEPOSIT = 100   # total ETB deposited to unlock wheel
-WHEEL_MIN_GAMES   = 5     # games played to unlock wheel
+# Unlock: player must have deposited ≥ WHEEL_UNLOCK_DEPOSIT total ETB to the
+# bingo game AND have played ≥ WHEEL_UNLOCK_GAMES bingo games.
+# The wheel is a bingo loyalty bonus — no separate "wheel deposit" required.
+WHEEL_UNLOCK_DEPOSIT = 100  # cumulative bingo deposits needed
+WHEEL_UNLOCK_GAMES   = 5    # bingo games played needed
+WHEEL_DAILY_SPINS    = 2    # free spins that replenish every midnight UTC
+WHEEL_BONUS_EVERY    = 5    # +1 bonus spin awarded per this many games played
+# Prizes and weights (index-aligned). All prizes ≥ 1 ETB — no empty slot.
+# 1/5/10/15 are common; 20/30/40/50 are rare.
+WHEEL_PRIZES  = [1,  5,  10, 15, 20, 30, 40, 50]
+WHEEL_WEIGHTS = [25, 22, 18, 12, 10,  7,  4,  2]
 
 # ── Daily Tasks ───────────────────────────────────────────────────────────────
 TASK_MAX_PRIZE = 500      # admin cannot set a task prize above this
@@ -455,6 +460,9 @@ def init_db():
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_banned INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE bingo_players ADD COLUMN IF NOT EXISTS picked_number2 INTEGER",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_spin_at DOUBLE PRECISION",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS wheel_daily_count INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS wheel_daily_date TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS wheel_bonus_used INTEGER NOT NULL DEFAULT 0",
                 """CREATE TABLE IF NOT EXISTS daily_tasks (
                     id SERIAL PRIMARY KEY, title TEXT NOT NULL,
                     description TEXT, url TEXT NOT NULL,
@@ -1755,70 +1763,161 @@ def _task_completed_ever(user_id: int, task_id: int) -> bool:
     )
     return bool(row)
 
-# ── Wheel ─────────────────────────────────────────────────────────────────────
+# ── Wheel helpers ─────────────────────────────────────────────────────────────
+
+def _today_utc_str() -> str:
+    """Return today's date as 'YYYY-MM-DD' in UTC — used as the daily reset key."""
+    return _dt.now(tz=_tz.utc).strftime('%Y-%m-%d')
+
+def _midnight_utc_ts() -> int:
+    """Unix timestamp of the next UTC midnight (when daily spins replenish)."""
+    from datetime import timedelta as _td
+    now = _dt.now(tz=_tz.utc)
+    midnight = (now + _td(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return int(midnight.timestamp())
+
+def _wheel_state(fresh: dict) -> dict:
+    """
+    Compute full spin state from a users row.
+
+    Returns a dict with:
+      eligible          – bool  (deposit + games thresholds met)
+      locked_reasons    – list of human-readable strings if not eligible
+      daily_remaining   – int   (0–WHEEL_DAILY_SPINS)
+      bonus_remaining   – int   (cumulative bonus spins not yet consumed)
+      total_available   – int   (daily_remaining + bonus_remaining)
+      bonus_earned      – int   (total bonus spins ever earned)
+      bonus_used        – int
+      games_played      – int
+      games_to_next_bonus – int  (games until next +1 bonus spin)
+      next_bonus_at_games – int  (absolute game count when next bonus unlocks)
+      next_daily_reset_ts – int  (Unix ts of next midnight UTC)
+      total_deposited   – int
+    """
+    games     = int(fresh.get('games_played', 0))
+    total_dep = _total_deposited(fresh['tg_id'])
+    games_ok  = games >= WHEEL_UNLOCK_GAMES
+    dep_ok    = total_dep >= WHEEL_UNLOCK_DEPOSIT
+    eligible  = games_ok and dep_ok
+
+    reasons = []
+    if not dep_ok:
+        reasons.append(
+            f"Deposit at least {WHEEL_UNLOCK_DEPOSIT} ETB to the bingo game "
+            f"({total_dep} ETB deposited so far)"
+        )
+    if not games_ok:
+        need = WHEEL_UNLOCK_GAMES - games
+        reasons.append(
+            f"Play {need} more bingo game{'s' if need != 1 else ''} "
+            f"({games}/{WHEEL_UNLOCK_GAMES} played)"
+        )
+
+    # ── Daily spins ───────────────────────────────────────────────────────────
+    today       = _today_utc_str()
+    stored_date = str(fresh.get('wheel_daily_date') or '')
+    if stored_date == today:
+        daily_used = int(fresh.get('wheel_daily_count') or 0)
+    else:
+        daily_used = 0      # new day — reset
+    daily_remaining = max(0, WHEEL_DAILY_SPINS - daily_used)
+
+    # ── Bonus spins (every WHEEL_BONUS_EVERY games) ────────────────────────────
+    bonus_earned    = games // WHEEL_BONUS_EVERY
+    bonus_used      = int(fresh.get('wheel_bonus_used') or 0)
+    bonus_remaining = max(0, bonus_earned - bonus_used)
+
+    # How many games until the NEXT bonus spin unlocks
+    next_bonus_at   = (bonus_earned + 1) * WHEEL_BONUS_EVERY
+    games_to_next   = next_bonus_at - games   # always 1–WHEEL_BONUS_EVERY
+
+    return {
+        'eligible':            eligible,
+        'locked_reasons':      reasons,
+        'daily_remaining':     daily_remaining,
+        'daily_used':          daily_used,
+        'daily_max':           WHEEL_DAILY_SPINS,
+        'bonus_remaining':     bonus_remaining,
+        'bonus_earned':        bonus_earned,
+        'bonus_used':          bonus_used,
+        'total_available':     daily_remaining + bonus_remaining,
+        'games_played':        games,
+        'games_to_next_bonus': games_to_next,
+        'next_bonus_at_games': next_bonus_at,
+        'next_daily_reset_ts': _midnight_utc_ts(),
+        'total_deposited':     total_dep,
+        'prizes':              WHEEL_PRIZES,
+        'weights':             WHEEL_WEIGHTS,
+    }
 
 @app.route('/api/wheel/status', methods=['GET'])
 def wheel_status():
     user, _, err = require_auth()
     if err: return err
     fresh = query_db('SELECT * FROM users WHERE id=?', (user['id'],), one=True)
-    total_dep  = _total_deposited(fresh['tg_id'])
-    games_ok   = fresh['games_played'] >= WHEEL_MIN_GAMES
-    deposit_ok = total_dep >= WHEEL_MIN_DEPOSIT
-    eligible   = games_ok and deposit_ok
-    spun_today = _is_today(fresh.get('last_spin_at'))
-    reasons    = []
-    if not deposit_ok:
-        reasons.append(f"Deposit at least {WHEEL_MIN_DEPOSIT} ETB total ({total_dep} deposited so far)")
-    if not games_ok:
-        need = WHEEL_MIN_GAMES - fresh['games_played']
-        reasons.append(f"Play {need} more game{'s' if need != 1 else ''} ({fresh['games_played']}/{WHEEL_MIN_GAMES})")
-    # next spin time: midnight UTC
-    now_utc   = _dt.now(tz=_tz.utc)
-    from datetime import timedelta as _td
-    tomorrow  = (now_utc + _td(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-    next_spin = int(tomorrow.timestamp()) if spun_today else None
-    return jsonify({
-        'eligible':       eligible,
-        'locked_reasons': reasons,
-        'spun_today':     spun_today,
-        'next_spin_ts':   next_spin,
-        'prizes':         WHEEL_PRIZES,
-        'weights':        WHEEL_WEIGHTS,
-        'total_deposited': total_dep,
-        'games_played':   fresh['games_played'],
-    })
+    return jsonify(_wheel_state(fresh))
 
 @app.route('/api/wheel/spin', methods=['POST'])
 def wheel_spin():
+    """
+    Consume one spin.  Priority: daily spins first, then bonus spins.
+    Spin type is determined server-side — the client just calls spin.
+    """
     user, _, err = require_auth()
     if err: return err
     fresh = query_db('SELECT * FROM users WHERE id=?', (user['id'],), one=True)
-    # Eligibility checks
-    total_dep = _total_deposited(fresh['tg_id'])
-    if total_dep < WHEEL_MIN_DEPOSIT:
-        return jsonify({'error': f'Deposit at least {WHEEL_MIN_DEPOSIT} ETB to unlock the wheel'}), 403
-    if fresh['games_played'] < WHEEL_MIN_GAMES:
-        return jsonify({'error': f'Play at least {WHEEL_MIN_GAMES} games to unlock the wheel'}), 403
-    if _is_today(fresh.get('last_spin_at')):
-        return jsonify({'error': 'You already spun today. Come back tomorrow!'}), 429
+    st    = _wheel_state(fresh)
+
+    if not st['eligible']:
+        reasons = '; '.join(st['locked_reasons'])
+        return jsonify({'error': f'Wheel locked: {reasons}'}), 403
+
+    if st['total_available'] <= 0:
+        return jsonify({
+            'error': 'No spins available. Daily spins reset at midnight UTC.',
+        }), 429
+
+    # Determine which bucket to consume
+    use_daily = st['daily_remaining'] > 0
+    today     = _today_utc_str()
+
     # Pick prize
     prize     = random.choices(WHEEL_PRIZES, weights=WHEEL_WEIGHTS, k=1)[0]
     seg_index = WHEEL_PRIZES.index(prize)
-    now_ts    = time.time()
-    if prize > 0:
-        execute_many([
-            ('UPDATE users SET balance=balance+?, last_spin_at=? WHERE id=?',
-             (prize, now_ts, user['id'])),
-        ])
+
+    if use_daily:
+        # Increment daily count; reset if this is the first spin of a new day
+        new_daily_count = (st['daily_used'] + 1)
+        update_sql = (
+            'UPDATE users SET balance=balance+?, wheel_daily_count=?, '
+            'wheel_daily_date=? WHERE id=?'
+        )
+        execute_db(update_sql, (prize, new_daily_count, today, user['id']))
+        spin_type = 'daily'
     else:
-        execute_db('UPDATE users SET last_spin_at=? WHERE id=?', (now_ts, user['id']))
+        # Consume a bonus spin
+        new_bonus_used = st['bonus_used'] + 1
+        update_sql = 'UPDATE users SET balance=balance+?, wheel_bonus_used=? WHERE id=?'
+        execute_db(update_sql, (prize, new_bonus_used, user['id']))
+        spin_type = 'bonus'
+
     fresh2 = query_db('SELECT balance FROM users WHERE id=?', (user['id'],), one=True)
-    logger.info(f'[wheel] user {user["id"]} spun → {prize} ETB (seg {seg_index})')
+    fresh3 = query_db('SELECT * FROM users WHERE id=?', (user['id'],), one=True)
+    st2    = _wheel_state(fresh3)
+
+    logger.info(
+        f'[wheel] user {user["id"]} spun ({spin_type}) → {prize} ETB '
+        f'(seg {seg_index}) | daily={st2["daily_remaining"]}/{WHEEL_DAILY_SPINS} '
+        f'bonus={st2["bonus_remaining"]}'
+    )
     return jsonify({
-        'prize':       prize,
-        'seg_index':  seg_index,
-        'new_balance': fresh2['balance'],
+        'prize':           prize,
+        'seg_index':       seg_index,
+        'spin_type':       spin_type,
+        'new_balance':     fresh2['balance'],
+        'daily_remaining': st2['daily_remaining'],
+        'bonus_remaining': st2['bonus_remaining'],
+        'total_available': st2['total_available'],
     })
 
 # ── Daily Tasks ───────────────────────────────────────────────────────────────
