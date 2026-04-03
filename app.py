@@ -111,8 +111,9 @@ WHEEL_DAILY_SPINS    = 2    # free spins that replenish every midnight UTC
 WHEEL_BONUS_EVERY    = 5    # +1 bonus spin awarded per this many games played
 # Prizes and weights (index-aligned). All prizes ≥ 1 ETB — no empty slot.
 # 1/5/10/15 are common; 20/30/40/50 are rare.
+# 1/5 are very common; 10/15 are rare; 20/30/40/50 are jackpot (weight=0 = visual only)
 WHEEL_PRIZES  = [1,  5,  10, 15, 20, 30, 40, 50]
-WHEEL_WEIGHTS = [25, 22, 18, 12, 10,  7,  4,  2]
+WHEEL_WEIGHTS = [50, 40,  5,  5,  0,  0,  0,  0]
 
 # ── Daily Tasks ───────────────────────────────────────────────────────────────
 TASK_MAX_PRIZE = 500      # admin cannot set a task prize above this
@@ -418,6 +419,7 @@ def init_db():
                 description TEXT,
                 url         TEXT NOT NULL,
                 prize       INTEGER NOT NULL DEFAULT 10,
+                tier        INTEGER NOT NULL DEFAULT 1,
                 is_active   INTEGER NOT NULL DEFAULT 1,
                 created_by  INTEGER REFERENCES users(id),
                 created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -463,6 +465,8 @@ def init_db():
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS wheel_daily_count INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS wheel_daily_date TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS wheel_bonus_used INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS wheel_bonus_ts DOUBLE PRECISION NOT NULL DEFAULT 0",
+                "ALTER TABLE daily_tasks ADD COLUMN IF NOT EXISTS tier INTEGER NOT NULL DEFAULT 1",
                 """CREATE TABLE IF NOT EXISTS daily_tasks (
                     id SERIAL PRIMARY KEY, title TEXT NOT NULL,
                     description TEXT, url TEXT NOT NULL,
@@ -561,6 +565,7 @@ def init_db():
                     description TEXT,
                     url         TEXT NOT NULL,
                     prize       INTEGER DEFAULT 10,
+                    tier        INTEGER DEFAULT 1,
                     is_active   INTEGER DEFAULT 1,
                     created_by  INTEGER,
                     created_at  TEXT DEFAULT (datetime('now'))
@@ -1206,6 +1211,8 @@ def leave_game(gid):
             return jsonify({'ok': True, 'refunded': True})
         # Active forfeit — record as 'left' (not a loss)
         execute_db('UPDATE users SET games_played=games_played+1 WHERE id=?', (user['id'],))
+        _gp_after_leave = query_db('SELECT games_played FROM users WHERE id=?', (user['id'],), one=True)
+        if _gp_after_leave: _maybe_grant_wheel_bonus(user['id'], _gp_after_leave['games_played'])
         execute_db(
             "INSERT INTO game_history (user_id,game_id,bet_amount,prize_won,won,result) VALUES (?,?,?,0,0,'left')",
             (user['id'], gid, cost)
@@ -1429,6 +1436,10 @@ def claim_bingo(gid):
                 ))
             execute_many(loser_stmts)
         fresh = query_db('SELECT * FROM users WHERE id=?', (user['id'],), one=True)
+        _maybe_grant_wheel_bonus(user['id'], fresh['games_played'])
+        for lo in losers:
+            lo_fresh = query_db('SELECT games_played FROM users WHERE id=?', (lo['user_id'],), one=True)
+            if lo_fresh: _maybe_grant_wheel_bonus(lo['user_id'], lo_fresh['games_played'])
     return jsonify({'winner': True, 'prize': prize, 'user': fresh})
 
 @app.route('/api/history', methods=['GET'])
@@ -1764,6 +1775,25 @@ def _task_completed_ever(user_id: int, task_id: int) -> bool:
     return bool(row)
 
 # ── Wheel helpers ─────────────────────────────────────────────────────────────
+def _maybe_grant_wheel_bonus(user_id: int, new_games: int):
+    """
+    Called after games_played increments.  If the player just crossed a
+    WHEEL_BONUS_EVERY boundary, stamp wheel_bonus_ts = now + 86 400 so the
+    newly earned bonus spin expires in 24 h if unused.
+    """
+    if new_games % WHEEL_BONUS_EVERY != 0:
+        return
+    expires_at = time.time() + 86400
+    execute_db(
+        'UPDATE users SET wheel_bonus_ts=? WHERE id=?',
+        (expires_at, user_id)
+    )
+    logger.info(
+        f'[wheel] bonus spin granted to user {user_id} '
+        f'(games={new_games}, expires in 24h)'
+    )
+
+
 
 def _today_utc_str() -> str:
     """Return today's date as 'YYYY-MM-DD' in UTC — used as the daily reset key."""
@@ -1825,7 +1855,15 @@ def _wheel_state(fresh: dict) -> dict:
     # ── Bonus spins (every WHEEL_BONUS_EVERY games) ────────────────────────────
     bonus_earned    = games // WHEEL_BONUS_EVERY
     bonus_used      = int(fresh.get('wheel_bonus_used') or 0)
-    bonus_remaining = max(0, bonus_earned - bonus_used)
+    raw_bonus       = max(0, bonus_earned - bonus_used)
+    # Bonus B: unused bonus spins expire 24 h after being earned.
+    # wheel_bonus_ts holds the expiry timestamp set when the bonus was granted.
+    bonus_ts        = float(fresh.get('wheel_bonus_ts') or 0)
+    now_check       = time.time()
+    if raw_bonus > 0 and bonus_ts > 0 and now_check > bonus_ts:
+        bonus_remaining = 0   # expired
+    else:
+        bonus_remaining = raw_bonus
 
     # How many games until the NEXT bonus spin unlocks
     next_bonus_at   = (bonus_earned + 1) * WHEEL_BONUS_EVERY
@@ -1895,10 +1933,14 @@ def wheel_spin():
         execute_db(update_sql, (prize, new_daily_count, today, user['id']))
         spin_type = 'daily'
     else:
-        # Consume a bonus spin
-        new_bonus_used = st['bonus_used'] + 1
-        update_sql = 'UPDATE users SET balance=balance+?, wheel_bonus_used=? WHERE id=?'
-        execute_db(update_sql, (prize, new_bonus_used, user['id']))
+        # Consume a bonus spin; if more remain, extend expiry by 24h from now
+        new_bonus_used   = st['bonus_used'] + 1
+        still_remaining  = max(0, st['bonus_remaining'] - 1)
+        new_bonus_ts     = (time.time() + 86400) if still_remaining > 0 else 0
+        update_sql = (
+            'UPDATE users SET balance=balance+?, wheel_bonus_used=?, wheel_bonus_ts=? WHERE id=?'
+        )
+        execute_db(update_sql, (prize, new_bonus_used, new_bonus_ts, user['id']))
         spin_type = 'bonus'
 
     fresh2 = query_db('SELECT balance FROM users WHERE id=?', (user['id'],), one=True)
@@ -1926,13 +1968,33 @@ def wheel_spin():
 def list_tasks():
     user, _, err = require_auth()
     if err: return err
-    tasks = query_db("SELECT * FROM daily_tasks WHERE is_active=1 ORDER BY created_at DESC")
+    tasks = query_db("SELECT * FROM daily_tasks WHERE is_active=1 ORDER BY tier, created_at DESC")
+    # Compute which tiers the user has fully completed
+    completed_ids = {r['task_id'] for r in query_db(
+        'SELECT task_id FROM task_completions WHERE user_id=?', (user['id'],)
+    )}
+    # Count active tasks per tier and how many this user completed
+    t1_all = [t for t in tasks if int(t.get('tier') or 1) == 1]
+    t2_all = [t for t in tasks if int(t.get('tier') or 1) == 2]
+    t3_all = [t for t in tasks if int(t.get('tier') or 1) == 3]
+    t1_done = all(t['id'] in completed_ids for t in t1_all) if t1_all else True
+    t2_done = all(t['id'] in completed_ids for t in t2_all) if t2_all else True
+    t2_unlocked = t1_done
+    t3_unlocked = t1_done and t2_done
     result = []
     for t in tasks:
-        # 'completed' = ever completed (one-time, permanent)
-        completed = _task_completed_ever(user['id'], t['id'])
-        result.append({**t, 'completed': completed, 'claimed_today': completed})
-    return jsonify(result)
+        tier = int(t.get('tier') or 1)
+        completed = t['id'] in completed_ids
+        unlocked  = True if tier == 1 else (t2_unlocked if tier == 2 else t3_unlocked)
+        result.append({**t, 'completed': completed, 'claimed_today': completed,
+                       'tier': tier, 'unlocked': unlocked})
+    return jsonify({
+        'tasks': result,
+        'tier_1_complete': t1_done,
+        'tier_2_complete': t2_done,
+        'tier_2_unlocked': t2_unlocked,
+        'tier_3_unlocked': t3_unlocked,
+    })
 
 @app.route('/api/tasks/<int:task_id>/claim', methods=['POST'])
 def claim_task(task_id):
@@ -1956,6 +2018,17 @@ def claim_task(task_id):
     # Fix C: one-time check
     if _task_completed_ever(user['id'], task_id):
         return jsonify({'error': 'You have already completed this task!'}), 429
+    # Tier gate: check previous tiers are complete
+    task_tier = int(task.get('tier') or 1)
+    if task_tier > 1:
+        all_tasks = query_db("SELECT id, tier FROM daily_tasks WHERE is_active=1")
+        done_ids  = {r['task_id'] for r in query_db(
+            'SELECT task_id FROM task_completions WHERE user_id=?', (user['id'],)
+        )}
+        for prev_tier in range(1, task_tier):
+            prev_tasks = [t for t in all_tasks if int(t.get('tier') or 1) == prev_tier]
+            if prev_tasks and not all(t['id'] in done_ids for t in prev_tasks):
+                return jsonify({'error': f'Complete all Tier {prev_tier} tasks first!'}), 403
 
     # Fix D: server-side link-open verification
     now_ts = time.time()
@@ -2008,14 +2081,17 @@ def admin_create_task():
     title = str(body.get('title', '')).strip()
     url   = str(body.get('url', '')).strip()
     prize = int(body.get('prize', 10))
+    tier  = int(body.get('tier', 1))
     desc  = str(body.get('description', '')).strip()
     if not title: return jsonify({'error': 'Title required'}), 400
     if not url:   return jsonify({'error': 'URL required'}), 400
     if prize < 1 or prize > TASK_MAX_PRIZE:
         return jsonify({'error': f'Prize must be 1–{TASK_MAX_PRIZE} ETB'}), 400
+    if tier not in (1, 2, 3):
+        return jsonify({'error': 'Tier must be 1, 2, or 3'}), 400
     tid = execute_db(
-        'INSERT INTO daily_tasks (title, description, url, prize, created_by) VALUES (?,?,?,?,?)',
-        (title, desc or None, url, prize, admin['id'])
+        'INSERT INTO daily_tasks (title, description, url, prize, tier, created_by) VALUES (?,?,?,?,?,?)',
+        (title, desc or None, url, prize, tier, admin['id'])
     )
     task = query_db('SELECT * FROM daily_tasks WHERE id=?', (tid,), one=True)
     return jsonify(task), 201
@@ -2030,15 +2106,18 @@ def admin_update_task(task_id):
     title     = str(body.get('title',       task['title'])).strip()
     url       = str(body.get('url',         task['url'])).strip()
     prize     = int(body.get('prize',       task['prize']))
+    tier      = int(body.get('tier',        task.get('tier') or 1))
     desc      = str(body.get('description', task['description'] or '')).strip()
     is_active = 1 if body.get('is_active', bool(task['is_active'])) else 0
     if not title: return jsonify({'error': 'Title required'}), 400
     if not url:   return jsonify({'error': 'URL required'}), 400
     if prize < 1 or prize > TASK_MAX_PRIZE:
         return jsonify({'error': f'Prize must be 1–{TASK_MAX_PRIZE} ETB'}), 400
+    if tier not in (1, 2, 3):
+        return jsonify({'error': 'Tier must be 1, 2, or 3'}), 400
     execute_db(
-        'UPDATE daily_tasks SET title=?, description=?, url=?, prize=?, is_active=? WHERE id=?',
-        (title, desc or None, url, prize, is_active, task_id)
+        'UPDATE daily_tasks SET title=?, description=?, url=?, prize=?, tier=?, is_active=? WHERE id=?',
+        (title, desc or None, url, prize, tier, is_active, task_id)
     )
     task = query_db('SELECT * FROM daily_tasks WHERE id=?', (task_id,), one=True)
     return jsonify(task)
