@@ -218,6 +218,14 @@ body::before {
 .prize-pill { font-family:'Share Tech Mono',monospace; font-size:10px; padding:2px 8px; border-radius:99px; border:1px solid var(--border2); color:var(--text3); background:var(--surf2); }
 .prize-pill.common { border-color:var(--cyan3); color:var(--cyan); }
 .prize-pill.rare   { border-color:rgba(255,179,0,.4); color:var(--amber); }
+.task-item.locked { opacity:.45; filter:grayscale(.7); pointer-events:none; }
+.tier-progress { display:flex; gap:6px; margin-bottom:10px; }
+.tier-pip {
+  flex:1; height:4px; border-radius:2px;
+  background:var(--border2); transition:background .3s;
+}
+.tier-pip.done { background:var(--green2); box-shadow:0 0 6px rgba(0,200,83,.4); }
+.tier-pip.active { background:var(--cyan3); }
 .task-item { background:var(--surf2); border:1px solid var(--border2); border-radius:10px; padding:12px 14px; margin-bottom:8px; display:flex; align-items:center; gap:12px; transition:border-color .2s; }
 .task-item.claimed { opacity:.5; filter:grayscale(.5); }
 .task-icon  { font-size:22px; flex-shrink:0; width:36px; text-align:center; }
@@ -1705,13 +1713,24 @@ body::before {
         </div>
       </div>
 
-      <!-- ── Daily Tasks ── -->
+      <!-- ── Daily Tasks (Tiered) ── -->
       <div class="panel fade-in">
         <div class="earn-section-title">📋 Daily Tasks</div>
-        <p style="font-size:11px;color:var(--text3);margin-bottom:12px">
-          Complete tasks below to earn free ETB. Each task can only be claimed once.
+        <p style="font-size:11px;color:var(--text3);margin-bottom:10px">
+          Complete tasks to earn free ETB. Unlock higher tiers by finishing lower ones.
         </p>
-        <div id="tasks-list"><div class="empty">Loading…</div></div>
+        <!-- Tier tabs -->
+        <div class="tab-row" style="margin-bottom:10px">
+          <button class="tab-btn active" id="tier-tab-1" onclick="switchTierTab(1)">🥉 Tier 1</button>
+          <button class="tab-btn"        id="tier-tab-2" onclick="switchTierTab(2)">🥈 Tier 2</button>
+          <button class="tab-btn"        id="tier-tab-3" onclick="switchTierTab(3)">🥇 Tier 3</button>
+        </div>
+        <!-- Tier lock banner -->
+        <div id="tier-lock-banner" style="display:none;background:rgba(255,45,120,.07);border:1px solid var(--pink2);border-radius:8px;padding:10px 12px;margin-bottom:10px;font-size:12px;color:var(--pink)"></div>
+        <!-- Task lists per tier -->
+        <div id="tier-tasks-1"></div>
+        <div id="tier-tasks-2" style="display:none"></div>
+        <div id="tier-tasks-3" style="display:none"></div>
       </div>
     </div>
 
@@ -1763,6 +1782,11 @@ body::before {
           <input  class="input" id="atf-desc"  placeholder="Short description (optional)"             style="margin-bottom:6px">
           <input  class="input" id="atf-url"   placeholder="Link  https://t.me/…"                    style="margin-bottom:6px">
           <input  class="input" id="atf-prize" type="number" min="1" max="500" placeholder="Prize ETB (1–500)" style="margin-bottom:6px">
+          <select class="input" id="atf-tier" style="margin-bottom:6px">
+            <option value="1">🥉 Tier 1 — 1–3 ETB (beginner)</option>
+            <option value="2">🥈 Tier 2 — 4–5 ETB (intermediate)</option>
+            <option value="3">🥇 Tier 3 — 6+ ETB (advanced)</option>
+          </select>
           <input type="hidden" id="atf-id" value="">
           <div style="display:flex;gap:6px">
             <button class="btn btn-cyan  btn-full btn-sm" onclick="adminSaveTask()">💾 Save</button>
@@ -3248,18 +3272,20 @@ function navToEarn() {
 
 
 /* Prize config — mirrors backend WHEEL_PRIZES / WHEEL_WEIGHTS */
+// Matches backend WHEEL_PRIZES — 20/30/40/50 are jackpot (weight=0, visual only)
 const W_PRIZES  = [1, 5, 10, 15, 20, 30, 40, 50];
+const W_JACKPOT = new Set([20, 30, 40, 50]);  // weight=0 segments
 /* Visual style per segment — one entry per prize, same index order */
+// jackpot=true means weight-0 segments — shown on wheel but cannot land via normal play
 const W_SEGS = [
-  //  label           bg          arc          text        shadow
-  { label:'1\nETB',  bg:'#0d0d1a', arc:'#2a2a4a', text:'#6060a0', shadow:'' },
-  { label:'5\nETB',  bg:'#001e28', arc:'#00b8d4', text:'#00e5ff', shadow:'0 0 10px #00e5ff' },
-  { label:'10\nETB', bg:'#001a0e', arc:'#00a843', text:'#00e676', shadow:'0 0 10px #00e676' },
-  { label:'15\nETB', bg:'#1a1500', arc:'#b09800', text:'#f0d000', shadow:'0 0 10px #f0d000' },
-  { label:'20\nETB', bg:'#1c1400', arc:'#cc9900', text:'#ffb300', shadow:'0 0 12px #ffb300' },
-  { label:'30\nETB', bg:'#1c0018', arc:'#c2195a', text:'#ff2d78', shadow:'0 0 12px #ff2d78' },
-  { label:'40\nETB', bg:'#140020', arc:'#7c38cc', text:'#c06aff', shadow:'0 0 14px #c06aff' },
-  { label:'50\nETB', bg:'#1c1800', arc:'#ccaa00', text:'#ffd700', shadow:'0 0 18px #ffd700' },
+  { label:'1\nETB',  bg:'#0d0d1a', arc:'#2a2a4a', text:'#7070b0', shadow:'',              jackpot:false },
+  { label:'5\nETB',  bg:'#001e28', arc:'#00b8d4', text:'#00e5ff', shadow:'0 0 10px #00e5ff', jackpot:false },
+  { label:'10\nETB', bg:'#001a0e', arc:'#00a843', text:'#00e676', shadow:'0 0 10px #00e676', jackpot:false },
+  { label:'15\nETB', bg:'#1a1500', arc:'#b09800', text:'#f0d000', shadow:'0 0 10px #f0d000', jackpot:false },
+  { label:'20\nETB', bg:'#1c0a00', arc:'#ff6600', text:'#ff9944', shadow:'0 0 14px #ff8800', jackpot:true  },
+  { label:'30\nETB', bg:'#1c0018', arc:'#c2195a', text:'#ff2d78', shadow:'0 0 14px #ff2d78', jackpot:true  },
+  { label:'40\nETB', bg:'#140020', arc:'#7c38cc', text:'#c06aff', shadow:'0 0 16px #c06aff', jackpot:true  },
+  { label:'50\nETB', bg:'#1c1800', arc:'#ccaa00', text:'#ffd700', shadow:'0 0 20px #ffd700', jackpot:true  },
 ];
 
 let _wheelRot = 0;
@@ -3380,12 +3406,15 @@ function drawWheel(highlightSeg = -1) {
 }
 
 function spinWheelTo(segIdx, onDone) {
-  const perSeg = 360 / W_SEGS.length;
+  const n      = W_SEGS.length;
+  const perSeg = 360 / n;
+  // To land segIdx under the top pointer, the canvas must arrive at
+  // R ≡ -segIdx * perSeg (mod 360)  →  (n - segIdx) % n * perSeg
+  const target = ((n - segIdx) % n) * perSeg;
   const curOff = _wheelRot % 360;
-  const target = segIdx * perSeg;
   let   delta  = target - curOff;
-  if (delta <= 0) delta += 360;
-  _wheelRot += 7 * 360 + delta;
+  if (delta <= 0) delta += 360;   // always spin forward
+  _wheelRot += 8 * 360 + delta;   // 8 full dramatic spins + landing delta
   const spinner = document.getElementById('wheel-spinner');
   spinner.style.transition = 'transform 5s cubic-bezier(0.17,0.67,0.08,1.0)';
   spinner.style.transform  = `rotate(${_wheelRot}deg)`;
@@ -3417,12 +3446,13 @@ function renderWheelStatus(st) {
   const resultArea = document.getElementById('wheel-result-area');
   if (!lockedBox || !wheelSec) return;
 
-  /* prize pills — all are real ETB values now */
+  /* prize pills — jackpot (weight=0) shown separately */
   const pillsEl = document.getElementById('wheel-prize-pills');
   if (pillsEl && st.prizes) {
-    const common = [1, 5, 10, 15];
-    pillsEl.innerHTML = st.prizes.map(p => {
-      const cls = common.includes(p) ? 'common' : 'rare';
+    pillsEl.innerHTML = st.prizes.map((p, i) => {
+      const isJackpot = W_SEGS[i]?.jackpot;
+      if (isJackpot) return `<span class="prize-pill" style="border-color:rgba(255,179,0,.4);color:var(--amber);opacity:.6" title="Jackpot — visual only">✦ ${p} ETB</span>`;
+      const cls = (p <= 5) ? 'common' : 'rare';
       return `<span class="prize-pill ${cls}">${p} ETB</span>`;
     }).join('');
   }
@@ -3549,32 +3579,88 @@ async function doSpin() {
   }
 }
 
-/* ════════════════ DAILY TASKS ═══════════════════════════════════════════ */
+/* ════════════════ DAILY TASKS (Tiered) ══════════════════════════════════ */
 /*
-  Smart verification (Fix D):
-  - When player taps "Go →", we record open_ts in sessionStorage keyed by task id.
-  - The Claim button only enables after MIN_VERIFY_SECS seconds have elapsed.
-  - On submit, open_ts is sent to the backend which re-validates the gap server-side.
-  - This prevents: (a) direct API claims with no link visit, (b) instant tap-claim,
-    (c) replaying old tokens (each open_ts is validated within the current day only).
+  Smart verification:
+  - Tapping "Go →" records open_ts in sessionStorage.
+  - Claim button stays disabled for MIN_VERIFY_SECS seconds.
+  - open_ts is sent to backend which re-validates the gap server-side.
+  Tier system:
+  - API returns { tasks, tier_2_unlocked, tier_3_unlocked }
+  - Tasks are split into tier-1/2/3 panes; locked panes show a banner.
 */
-const MIN_VERIFY_SECS = 45;    // seconds player must spend before claiming
-let _taskTimers = {};
+const MIN_VERIFY_SECS = 45;
+let _taskTimers  = {};
+let _activeTier  = 1;
+let _tierData    = null;   // last full API response
 
+/* ── Switch tier tab ── */
+function switchTierTab(n) {
+  _activeTier = n;
+  [1, 2, 3].forEach(t => {
+    document.getElementById(`tier-tab-${t}`)?.classList.toggle('active', t === n);
+    const pane = document.getElementById(`tier-tasks-${t}`);
+    if (pane) pane.style.display = t === n ? 'block' : 'none';
+  });
+  _renderLockBanner(n);
+}
+
+function _renderLockBanner(tier) {
+  const banner = document.getElementById('tier-lock-banner');
+  if (!banner || !_tierData) return;
+  if (tier === 1) {
+    banner.style.display = 'none'; return;
+  }
+  if (tier === 2 && !_tierData.tier_2_unlocked) {
+    banner.style.display = 'block';
+    banner.innerHTML = '🔒 Complete all <b>Tier 1</b> tasks to unlock Tier 2.';
+    return;
+  }
+  if (tier === 3 && !_tierData.tier_3_unlocked) {
+    banner.style.display = 'block';
+    const missing = !_tierData.tier_2_unlocked
+      ? 'Tier 1 <b>and</b> Tier 2'
+      : 'Tier 2';
+    banner.innerHTML = `🔒 Complete all ${missing} tasks to unlock Tier 3.`;
+    return;
+  }
+  banner.style.display = 'none';
+}
+
+/* ── Load all tasks ── */
 async function loadTasks() {
-  const el = document.getElementById('tasks-list');
-  if (!el) return;
-  el.innerHTML = '<div class="empty">Loading…</div>';
+  [1, 2, 3].forEach(t => {
+    const el = document.getElementById(`tier-tasks-${t}`);
+    if (el) el.innerHTML = '<div class="empty">Loading…</div>';
+  });
   try {
-    const tasks = await api('GET', '/api/tasks');
+    const data = await api('GET', '/api/tasks');
+    _tierData  = data;
+    const tasks = data.tasks || [];
+
     if (!tasks.length) {
-      el.innerHTML = '<div class="empty" style="padding:20px 0">No tasks available right now.<br>Check back soon!</div>';
+      document.getElementById('tier-tasks-1').innerHTML =
+        '<div class="empty" style="padding:20px 0">No tasks available yet.<br>Check back soon!</div>';
+      document.getElementById('tier-tasks-2').innerHTML = '';
+      document.getElementById('tier-tasks-3').innerHTML = '';
+      _renderLockBanner(_activeTier);
       return;
     }
-    el.innerHTML = tasks.map(t => buildTaskHTML(t)).join('');
-    // Restore any in-progress countdowns from this session
+
+    [1, 2, 3].forEach(tier => {
+      const pane  = document.getElementById(`tier-tasks-${tier}`);
+      if (!pane) return;
+      const tTasks = tasks.filter(t => (t.tier || 1) === tier);
+      if (!tTasks.length) {
+        pane.innerHTML = '<div class="empty" style="padding:12px 0;font-size:11px">No tasks in this tier yet.</div>';
+        return;
+      }
+      pane.innerHTML = tTasks.map(t => buildTaskHTML(t)).join('');
+    });
+
+    /* Restore in-progress countdowns */
     tasks.forEach(t => {
-      if (!t.completed) {
+      if (!t.completed && t.unlocked) {
         const stored = sessionStorage.getItem(`task_open_${t.id}`);
         if (stored) {
           const elapsed = Math.floor(Date.now() / 1000) - parseInt(stored);
@@ -3586,29 +3672,55 @@ async function loadTasks() {
         }
       }
     });
+
+    _renderLockBanner(_activeTier);
   } catch(e) {
-    el.innerHTML = '<div class="empty">Error loading tasks.</div>';
+    [1, 2, 3].forEach(t => {
+      const el = document.getElementById(`tier-tasks-${t}`);
+      if (el) el.innerHTML = '<div class="empty">Error loading tasks.</div>';
+    });
   }
 }
 
+/* ── Build one task card ── */
 function buildTaskHTML(t) {
-  const done    = !!t.completed;
-  const icons   = ['👆','❤️','🔔','👥','📣','⭐','🎯','🔗'];
-  const icon    = icons[t.id % icons.length];
+  const done     = !!t.completed;
+  const locked   = !t.unlocked;
+  const icons    = ['👆','❤️','🔔','👥','📣','⭐','🎯','🔗'];
+  const icon     = icons[t.id % icons.length];
+  const tierBadge = ['','🥉','🥈','🥇'][t.tier || 1];
+
+  const itemCls = `task-item${done ? ' claimed' : ''}${locked ? ' locked' : ''}`;
+
+  /* A locked task shows everything dimmed with a lock icon — no buttons */
+  if (locked) {
+    return `
+    <div class="${itemCls}" id="task-item-${t.id}" style="opacity:.45;filter:grayscale(.7)">
+      <div class="task-icon">🔒</div>
+      <div class="task-info">
+        <div class="task-title">${t.title}</div>
+        ${t.description ? `<div class="task-desc">${t.description}</div>` : ''}
+        <div class="task-prize" style="color:var(--text3)">+${t.prize} ETB ${tierBadge}</div>
+      </div>
+      <div class="task-actions">
+        <div class="task-countdown" style="color:var(--text3)">Locked</div>
+      </div>
+    </div>`;
+  }
 
   return `
-  <div class="task-item${done ? ' claimed' : ''}" id="task-item-${t.id}">
+  <div class="${itemCls}" id="task-item-${t.id}">
     <div class="task-icon">${icon}</div>
     <div class="task-info">
       <div class="task-title">${t.title}</div>
       ${t.description ? `<div class="task-desc">${t.description}</div>` : ''}
-      <div class="task-prize">${done ? '✓ Claimed' : `+${t.prize} ETB`}</div>
+      <div class="task-prize">${done ? '✓ Claimed' : `+${t.prize} ETB ${tierBadge}`}</div>
     </div>
     <div class="task-actions">
       ${!done ? `<button class="btn btn-ghost task-go-btn btn-sm"
         onclick="openTaskLink(${t.id},'${encodeURIComponent(t.url)}')">Go →</button>` : ''}
       <button class="btn btn-amber task-claim-btn btn-sm" id="claim-btn-${t.id}"
-        onclick="claimTask(${t.id})" ${done ? 'disabled' : 'disabled'}>
+        onclick="claimTask(${t.id})" disabled>
         ${done ? '✓ Done' : `+${t.prize} ETB`}
       </button>
       <div class="task-countdown" id="task-cd-${t.id}">
@@ -3618,12 +3730,11 @@ function buildTaskHTML(t) {
   </div>`;
 }
 
+/* ── Open task link ── */
 function openTaskLink(taskId, encodedUrl) {
-  const url = decodeURIComponent(encodedUrl);
-  /* Record the moment the player opened the link */
+  const url    = decodeURIComponent(encodedUrl);
   const nowSec = Math.floor(Date.now() / 1000);
   sessionStorage.setItem(`task_open_${taskId}`, String(nowSec));
-
   if (window.Telegram?.WebApp?.openLink) {
     window.Telegram.WebApp.openLink(url);
   } else {
@@ -3632,17 +3743,17 @@ function openTaskLink(taskId, encodedUrl) {
   startVerifyCountdown(taskId, MIN_VERIFY_SECS);
 }
 
+/* ── Verification countdown ── */
 function startVerifyCountdown(taskId, secsLeft) {
-  const cdEl  = document.getElementById(`task-cd-${taskId}`);
-  const btn   = document.getElementById(`claim-btn-${taskId}`);
+  const cdEl = document.getElementById(`task-cd-${taskId}`);
+  const btn  = document.getElementById(`claim-btn-${taskId}`);
   if (_taskTimers[taskId]) clearInterval(_taskTimers[taskId]);
-  let remaining = secsLeft;
+  let remaining = Math.ceil(secsLeft);
   function tick() {
     if (remaining <= 0) {
       clearInterval(_taskTimers[taskId]);
       delete _taskTimers[taskId];
       enableClaimBtn(taskId);
-      if (cdEl) cdEl.textContent = 'Ready to claim!';
       return;
     }
     if (cdEl) cdEl.textContent = `Wait ${remaining}s…`;
@@ -3655,35 +3766,44 @@ function startVerifyCountdown(taskId, secsLeft) {
 function enableClaimBtn(taskId) {
   const btn  = document.getElementById(`claim-btn-${taskId}`);
   const cdEl = document.getElementById(`task-cd-${taskId}`);
-  if (btn)  { btn.disabled = false; }
-  if (cdEl) { cdEl.textContent = 'Ready to claim!'; }
+  if (btn)  btn.disabled = false;
+  if (cdEl) cdEl.textContent = 'Ready to claim!';
 }
 
+/* ── Claim ── */
 async function claimTask(taskId) {
-  const btn   = document.getElementById(`claim-btn-${taskId}`);
-  /* Client-side: read the open_ts we stored when they clicked Go */
+  const btn    = document.getElementById(`claim-btn-${taskId}`);
   const openTs = sessionStorage.getItem(`task_open_${taskId}`);
-  if (!openTs) {
-    toast('Tap "Go →" first to visit the page!', 'error'); return;
-  }
+  if (!openTs) { toast('Tap "Go →" first to visit the page!', 'error'); return; }
   if (btn) btn.disabled = true;
   try {
-    /* Send open_ts to backend — it validates the time gap server-side */
     const res = await api('POST', `/api/tasks/${taskId}/claim`, { open_ts: parseInt(openTs) });
     sessionStorage.removeItem(`task_open_${taskId}`);
     S.user = { ...S.user, balance: res.new_balance };
     renderHeader();
-    toast(`+${res.prize} ETB earned!`, 'success');
-    loadTasks();
+    toast(`+${res.prize} ETB earned! 🎉`, 'success');
+    loadTasks();                 // full reload to update tier unlock states
   } catch(e) {
     if (btn) btn.disabled = false;
     const msg = e.message || 'Claim failed';
-    toast(msg, 'error');
-    if (msg.toLowerCase().includes('already')) loadTasks();
+    /* Show remaining wait time if backend returns retry_after */
+    if (msg.includes('second')) {
+      toast(msg, 'error');
+    } else if (msg.toLowerCase().includes('tier')) {
+      toast(msg, 'error');
+      loadTasks();
+    } else if (msg.toLowerCase().includes('already')) {
+      toast(msg, 'info');
+      loadTasks();
+    } else {
+      toast(msg, 'error');
+    }
   }
 }
 
-/* ── Admin Tasks ── */
+/* ════════════════ ADMIN TASKS ══════════════════════════════════════════ */
+const TIER_LABELS = { 1: '🥉 T1', 2: '🥈 T2', 3: '🥇 T3' };
+
 async function loadAdminTasks() {
   const el = document.getElementById('admin-tasks-list');
   if (!el) return;
@@ -3694,20 +3814,22 @@ async function loadAdminTasks() {
     el.innerHTML = tasks.map(t => `
       <div class="admin-task-row">
         <div class="admin-task-info">
-          <div class="admin-task-title">${t.title}
+          <div class="admin-task-title">
+            <span style="font-size:10px;margin-right:4px">${TIER_LABELS[t.tier||1]||''}</span>
+            ${t.title}
             <span class="${t.is_active ? 'admin-task-badge-on' : 'admin-task-badge-off'}">
               ${t.is_active ? 'ON' : 'OFF'}
             </span>
           </div>
           <div class="admin-task-meta">${t.prize} ETB &nbsp;·&nbsp;
-            <a href="${t.url}" style="color:var(--cyan3)" target="_blank">${t.url.length > 35 ? t.url.slice(0,35)+'…' : t.url}</a>
+            <a href="${t.url}" style="color:var(--cyan3)" target="_blank">${t.url.length > 32 ? t.url.slice(0,32)+'…' : t.url}</a>
           </div>
         </div>
         <div style="display:flex;gap:4px;flex-shrink:0">
-          <button class="btn btn-ghost btn-sm" onclick='showAdminTaskForm(${JSON.stringify(t)})'>✏️</button>
+          <button class="btn btn-ghost btn-sm" onclick='showAdminTaskForm(${JSON.stringify(t).replace(/'/g,"&#39;")})'>✏️</button>
           <button class="btn btn-ghost btn-sm"
-            style="border-color:${t.is_active ? 'var(--red)' : 'var(--green)'};color:${t.is_active ? 'var(--red)' : 'var(--green)'}"
-            onclick="adminToggleTask(${t.id},${t.is_active ? 0 : 1})">${t.is_active ? 'Off' : 'On'}</button>
+            style="border-color:${t.is_active?'var(--red)':'var(--green)'};color:${t.is_active?'var(--red)':'var(--green)'}"
+            onclick="adminToggleTask(${t.id},${t.is_active?0:1})">${t.is_active?'Off':'On'}</button>
           <button class="btn btn-danger btn-sm" onclick="adminDeleteTask(${t.id})">🗑</button>
         </div>
       </div>`).join('');
@@ -3723,36 +3845,66 @@ function showAdminTaskForm(task) {
   document.getElementById('atf-url').value   = task?.url         || '';
   document.getElementById('atf-prize').value = task?.prize       || '';
   document.getElementById('atf-id').value    = task?.id          || '';
+  /* Set tier dropdown — default 1 */
+  const tierEl = document.getElementById('atf-tier');
+  if (tierEl) tierEl.value = String(task?.tier || 1);
+  /* Auto-suggest tier based on prize if creating new */
+  if (!task && tierEl) {
+    const prizeEl = document.getElementById('atf-prize');
+    prizeEl.oninput = () => {
+      const p = parseInt(prizeEl.value) || 0;
+      tierEl.value = p <= 3 ? '1' : p <= 5 ? '2' : '3';
+    };
+  }
 }
+
 function hideAdminTaskForm() {
   const form = document.getElementById('admin-task-form');
   if (form) form.style.display = 'none';
-  ['atf-title','atf-desc','atf-url','atf-prize','atf-id'].forEach(id => {
-    const el = document.getElementById(id); if (el) el.value = '';
+  ['atf-title','atf-desc','atf-url','atf-prize','atf-tier','atf-id'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.value = el.tagName === 'SELECT' ? '1' : '';
   });
+  /* Remove auto-suggest binding */
+  const prizeEl = document.getElementById('atf-prize');
+  if (prizeEl) prizeEl.oninput = null;
 }
+
 async function adminSaveTask() {
-  const id   = document.getElementById('atf-id').value;
-  const body = {
+  const id    = document.getElementById('atf-id').value;
+  const tier  = parseInt(document.getElementById('atf-tier')?.value) || 1;
+  const body  = {
     title:       document.getElementById('atf-title').value.trim(),
     description: document.getElementById('atf-desc').value.trim(),
     url:         document.getElementById('atf-url').value.trim(),
     prize:       parseInt(document.getElementById('atf-prize').value) || 0,
+    tier,
   };
   if (!body.title || !body.url || !body.prize) {
     toast('Title, URL and prize are required', 'error'); return;
   }
+  /* Tier / prize consistency warning (not a hard block — admin knows best) */
+  if ((tier === 1 && body.prize > 3) || (tier === 2 && (body.prize < 4 || body.prize > 5)) || (tier === 3 && body.prize < 6)) {
+    const confirm_ok = confirm(
+      `Prize ${body.prize} ETB doesn't match Tier ${tier} range.\n` +
+      `(T1: 1–3 ETB · T2: 4–5 ETB · T3: 6+ ETB)\nSave anyway?`
+    );
+    if (!confirm_ok) return;
+  }
   try {
-    if (id) { await api('PUT',  `/api/admin/tasks/${id}`, body); toast('Task updated', 'success'); }
-    else    { await api('POST', '/api/admin/tasks',        body); toast('Task created', 'success'); }
+    if (id) { await api('PUT',  `/api/admin/tasks/${id}`, body); toast('Task updated ✓', 'success'); }
+    else    { await api('POST', '/api/admin/tasks',        body); toast('Task created ✓', 'success'); }
     hideAdminTaskForm();
+    loadAdminTasks();
+  } catch(e) { toast(e.message || 'Error saving task', 'error'); }
+}
+
+async function adminToggleTask(id, active) {
+  try {
+    await api('PUT', `/api/admin/tasks/${id}`, { is_active: active });
     loadAdminTasks();
   } catch(e) { toast(e.message || 'Error', 'error'); }
 }
-async function adminToggleTask(id, active) {
-  try { await api('PUT', `/api/admin/tasks/${id}`, { is_active: active }); loadAdminTasks(); }
-  catch(e) { toast(e.message || 'Error', 'error'); }
-}
+
 async function adminDeleteTask(id) {
   if (!confirm('Delete this task permanently?')) return;
   try {
@@ -3761,6 +3913,7 @@ async function adminDeleteTask(id) {
     loadAdminTasks();
   } catch(e) { toast(e.message || 'Error', 'error'); }
 }
+
 </script>
 </body>
 </html>
