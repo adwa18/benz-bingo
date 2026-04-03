@@ -1674,13 +1674,26 @@ body::before {
 
       <!-- ── Spinning Wheel ── -->
       <div class="panel panel-pink fade-in" style="margin-bottom:12px">
-        <div class="earn-section-title">🎡 Daily Spin Wheel</div>
+        <div class="earn-section-title">🎡 Bingo Loyalty Wheel</div>
         <div id="wheel-locked-box" class="wheel-locked-box" style="display:none">
           <div class="lock-icon">🔒</div>
           <div class="lock-title">Wheel Locked</div>
           <div id="wheel-lock-reasons"></div>
         </div>
         <div id="wheel-section" style="display:none">
+          <!-- Spin counter bar -->
+          <div id="wheel-spins-bar" style="display:flex;align-items:center;justify-content:space-between;background:var(--surf2);border:1px solid var(--border2);border-radius:8px;padding:8px 12px;margin-bottom:10px">
+            <div>
+              <div style="font-size:10px;color:var(--text3);letter-spacing:.8px;text-transform:uppercase;margin-bottom:2px">Spins Available</div>
+              <div id="spins-total-badge" style="font-family:'Audiowide',sans-serif;font-size:22px;color:var(--pink);text-shadow:var(--glow-p)">0</div>
+            </div>
+            <div style="text-align:right;font-size:11px">
+              <div style="color:var(--text2)">Daily: <span id="spins-daily" style="color:var(--cyan);font-weight:700">0/2</span></div>
+              <div style="color:var(--text2);margin-top:2px">Bonus: <span id="spins-bonus" style="color:var(--amber);font-weight:700">0</span></div>
+            </div>
+          </div>
+          <!-- Bonus progress -->
+          <div id="wheel-bonus-progress" style="font-size:11px;color:var(--text3);text-align:center;margin-bottom:8px"></div>
           <div class="prize-pills" id="wheel-prize-pills"></div>
           <div class="wheel-outer">
             <div class="wheel-pointer">▼</div>
@@ -3233,19 +3246,20 @@ function navToEarn() {
 
 /* ════════════════ SPINNING WHEEL ════════════════════════════════════════ */
 
+
 /* Prize config — mirrors backend WHEEL_PRIZES / WHEEL_WEIGHTS */
-const W_PRIZES  = [0, 5, 10, 20, 25, 30, 40, 50];
-/* Visual style per segment */
+const W_PRIZES  = [1, 5, 10, 15, 20, 30, 40, 50];
+/* Visual style per segment — one entry per prize, same index order */
 const W_SEGS = [
-  // label       bg          glow/arc         textColor   textShadow
-  { label:'TRY\nAGAIN', bg:'#0a0a14', arc:'#1f1f35', text:'#50507a', shadow:'' },
-  { label:'5\nETB',     bg:'#001e28', arc:'#00b8d4', text:'#00e5ff', shadow:'0 0 10px #00e5ff' },
-  { label:'10\nETB',    bg:'#001a0e', arc:'#00a843', text:'#00e676', shadow:'0 0 10px #00e676' },
-  { label:'20\nETB',    bg:'#1c1400', arc:'#cc9900', text:'#ffb300', shadow:'0 0 10px #ffb300' },
-  { label:'25\nETB',    bg:'#1c0a00', arc:'#cc5500', text:'#ff8c00', shadow:'0 0 12px #ff8c00' },
-  { label:'30\nETB',    bg:'#1c0018', arc:'#c2195a', text:'#ff2d78', shadow:'0 0 12px #ff2d78' },
-  { label:'40\nETB',    bg:'#140020', arc:'#7c38cc', text:'#c06aff', shadow:'0 0 14px #c06aff' },
-  { label:'50\nETB',    bg:'#1c1400', arc:'#ccaa00', text:'#ffd700', shadow:'0 0 16px #ffd700' },
+  //  label           bg          arc          text        shadow
+  { label:'1\nETB',  bg:'#0d0d1a', arc:'#2a2a4a', text:'#6060a0', shadow:'' },
+  { label:'5\nETB',  bg:'#001e28', arc:'#00b8d4', text:'#00e5ff', shadow:'0 0 10px #00e5ff' },
+  { label:'10\nETB', bg:'#001a0e', arc:'#00a843', text:'#00e676', shadow:'0 0 10px #00e676' },
+  { label:'15\nETB', bg:'#1a1500', arc:'#b09800', text:'#f0d000', shadow:'0 0 10px #f0d000' },
+  { label:'20\nETB', bg:'#1c1400', arc:'#cc9900', text:'#ffb300', shadow:'0 0 12px #ffb300' },
+  { label:'30\nETB', bg:'#1c0018', arc:'#c2195a', text:'#ff2d78', shadow:'0 0 12px #ff2d78' },
+  { label:'40\nETB', bg:'#140020', arc:'#7c38cc', text:'#c06aff', shadow:'0 0 14px #c06aff' },
+  { label:'50\nETB', bg:'#1c1800', arc:'#ccaa00', text:'#ffd700', shadow:'0 0 18px #ffd700' },
 ];
 
 let _wheelRot = 0;
@@ -3257,111 +3271,110 @@ function drawWheel(highlightSeg = -1) {
   const ctx = canvas.getContext('2d');
   const W = canvas.width, H = canvas.height;
   const cx = W / 2, cy = H / 2;
-  const R  = cx - 8;         // outer radius
+  const R  = cx - 8;
   const n  = W_SEGS.length;
-  const segAng = (2 * Math.PI) / n;
+  const segAng   = (2 * Math.PI) / n;
   const baseStart = -Math.PI / 2 - segAng / 2;  // seg 0 centred at top
 
   ctx.clearRect(0, 0, W, H);
 
   W_SEGS.forEach((seg, i) => {
-    const s = baseStart + i * segAng;
-    const e = s + segAng;
+    const s   = baseStart + i * segAng;
+    const e   = s + segAng;
     const mid = s + segAng / 2;
     const isHi = i === highlightSeg;
 
-    /* filled wedge */
+    /* wedge fill */
     ctx.beginPath();
     ctx.moveTo(cx, cy);
     ctx.arc(cx, cy, R, s, e);
     ctx.closePath();
     if (isHi) {
-      const grd = ctx.createRadialGradient(cx, cy, R * 0.3, cx, cy, R);
-      grd.addColorStop(0, seg.bg);
-      grd.addColorStop(1, seg.arc + '55');
+      const grd = ctx.createRadialGradient(cx, cy, R * 0.2, cx, cy, R);
+      grd.addColorStop(0, seg.arc + '44');
+      grd.addColorStop(1, seg.bg);
       ctx.fillStyle = grd;
     } else {
       ctx.fillStyle = seg.bg;
     }
     ctx.fill();
 
-    /* arc rim glow */
+    /* arc rim */
     ctx.beginPath();
-    ctx.arc(cx, cy, R - 1, s + 0.06, e - 0.06);
+    ctx.arc(cx, cy, R - 1, s + 0.05, e - 0.05);
     ctx.strokeStyle = isHi ? seg.text : seg.arc;
-    ctx.lineWidth   = isHi ? 4 : 2;
+    ctx.lineWidth   = isHi ? 4 : 2.5;
     ctx.shadowColor = isHi ? seg.text : 'transparent';
-    ctx.shadowBlur  = isHi ? 12 : 0;
+    ctx.shadowBlur  = isHi ? 14 : 0;
     ctx.stroke();
     ctx.shadowBlur = 0;
 
-    /* divider lines */
+    /* spoke dividers */
     ctx.beginPath();
     ctx.moveTo(cx, cy);
-    const dx = Math.cos(s) * R, dy = Math.sin(s) * R;
-    ctx.lineTo(cx + dx, cy + dy);
-    ctx.strokeStyle = '#1f1f35';
+    ctx.lineTo(cx + Math.cos(s) * R, cy + Math.sin(s) * R);
+    ctx.strokeStyle = '#1a1a30';
     ctx.lineWidth = 1;
     ctx.stroke();
 
-    /* prize label — two lines (value + ETB) */
+    /* prize label (two lines) */
     ctx.save();
     ctx.translate(cx, cy);
     ctx.rotate(mid);
-    const labelLines = seg.label.split('\n');
-    const textR = R * 0.68;
-    ctx.textAlign = 'center';
+    const parts  = seg.label.split('\n');
+    const textR  = R * 0.67;
+    ctx.textAlign    = 'center';
     ctx.textBaseline = 'middle';
     if (seg.shadow) {
       ctx.shadowColor = seg.text;
-      ctx.shadowBlur  = isHi ? 16 : 8;
+      ctx.shadowBlur  = isHi ? 18 : 9;
     }
-    /* top line (number) */
-    ctx.font = `bold ${i === 0 ? 11 : 15}px 'Audiowide', sans-serif`;
+    /* number */
+    ctx.font      = `bold 14px 'Audiowide', sans-serif`;
     ctx.fillStyle = seg.text;
-    ctx.fillText(labelLines[0], textR, labelLines[1] ? -7 : 0);
-    /* bottom line (ETB / label) */
-    if (labelLines[1]) {
-      ctx.font = `bold 9px 'Share Tech Mono', monospace`;
-      ctx.fillStyle = seg.text + 'cc';
+    ctx.fillText(parts[0], textR, parts[1] ? -7 : 0);
+    /* ETB */
+    if (parts[1]) {
+      ctx.font      = `bold 9px 'Share Tech Mono', monospace`;
+      ctx.fillStyle = seg.text + 'bb';
       ctx.shadowBlur = 0;
-      ctx.fillText(labelLines[1], textR, 7);
+      ctx.fillText(parts[1], textR, 7);
     }
     ctx.restore();
   });
 
-  /* outer border ring */
+  /* outer border */
   ctx.beginPath();
   ctx.arc(cx, cy, R, 0, 2 * Math.PI);
-  ctx.strokeStyle = '#2a2a48';
-  ctx.lineWidth = 2;
+  ctx.strokeStyle = '#2a2a50';
+  ctx.lineWidth = 2.5;
   ctx.shadowColor = '#00e5ff';
-  ctx.shadowBlur = 6;
+  ctx.shadowBlur  = 8;
   ctx.stroke();
   ctx.shadowBlur = 0;
 
   /* centre hub */
   const hubR = 22;
   const hGrd = ctx.createRadialGradient(cx, cy, 0, cx, cy, hubR);
-  hGrd.addColorStop(0, '#1a1a2e');
+  hGrd.addColorStop(0, '#222240');
   hGrd.addColorStop(1, '#0d0d18');
   ctx.beginPath();
   ctx.arc(cx, cy, hubR, 0, 2 * Math.PI);
-  ctx.fillStyle = hGrd;
+  ctx.fillStyle   = hGrd;
   ctx.fill();
   ctx.strokeStyle = '#00e5ff';
-  ctx.lineWidth = 2;
+  ctx.lineWidth   = 2;
   ctx.shadowColor = '#00e5ff';
-  ctx.shadowBlur = 10;
+  ctx.shadowBlur  = 12;
   ctx.stroke();
   ctx.shadowBlur = 0;
 
   /* centre dot */
   ctx.beginPath();
-  ctx.arc(cx, cy, 6, 0, 2 * Math.PI);
-  ctx.fillStyle = '#00e5ff';
+  ctx.arc(cx, cy, 5, 0, 2 * Math.PI);
+  ctx.fillStyle   = '#00e5ff';
   ctx.shadowColor = '#00e5ff';
-  ctx.shadowBlur = 8;
+  ctx.shadowBlur  = 10;
   ctx.fill();
   ctx.shadowBlur = 0;
 }
@@ -3370,16 +3383,16 @@ function spinWheelTo(segIdx, onDone) {
   const perSeg = 360 / W_SEGS.length;
   const curOff = _wheelRot % 360;
   const target = segIdx * perSeg;
-  let delta = target - curOff;
+  let   delta  = target - curOff;
   if (delta <= 0) delta += 360;
-  _wheelRot += 6 * 360 + delta;
+  _wheelRot += 7 * 360 + delta;
   const spinner = document.getElementById('wheel-spinner');
-  spinner.style.transition = 'transform 4.5s cubic-bezier(0.17,0.67,0.10,0.99)';
+  spinner.style.transition = 'transform 5s cubic-bezier(0.17,0.67,0.08,1.0)';
   spinner.style.transform  = `rotate(${_wheelRot}deg)`;
   setTimeout(() => {
     drawWheel(segIdx);
     if (onDone) onDone();
-  }, 4600);
+  }, 5200);
 }
 
 /* ── Load earn screen ── */
@@ -3404,13 +3417,13 @@ function renderWheelStatus(st) {
   const resultArea = document.getElementById('wheel-result-area');
   if (!lockedBox || !wheelSec) return;
 
-  /* prize pills */
+  /* prize pills — all are real ETB values now */
   const pillsEl = document.getElementById('wheel-prize-pills');
   if (pillsEl && st.prizes) {
-    const common = [0, 5, 10, 20];
+    const common = [1, 5, 10, 15];
     pillsEl.innerHTML = st.prizes.map(p => {
       const cls = common.includes(p) ? 'common' : 'rare';
-      return `<span class="prize-pill ${cls}">${p === 0 ? 'Try Again' : p + ' ETB'}</span>`;
+      return `<span class="prize-pill ${cls}">${p} ETB</span>`;
     }).join('');
   }
 
@@ -3427,28 +3440,59 @@ function renderWheelStatus(st) {
   lockedBox.style.display = 'none';
   wheelSec.style.display  = 'block';
 
-  if (st.spun_today) {
-    spinBtn.disabled    = true;
-    spinBtn.textContent = '✓ Already Spun Today';
-    if (st.next_spin_ts) startSpinCountdown(st.next_spin_ts, statusMsg);
-    if (resultArea) resultArea.innerHTML = '';
+  /* spin counter bar */
+  const total   = st.total_available || 0;
+  const dailyR  = st.daily_remaining || 0;
+  const bonusR  = st.bonus_remaining || 0;
+  const dailyMax = st.daily_max || 2;
+  const totalBadge = document.getElementById('spins-total-badge');
+  const dailyEl    = document.getElementById('spins-daily');
+  const bonusEl    = document.getElementById('spins-bonus');
+  if (totalBadge) totalBadge.textContent = total;
+  if (dailyEl)    dailyEl.textContent    = `${dailyR}/${dailyMax}`;
+  if (bonusEl)    bonusEl.textContent    = bonusR;
+
+  /* bonus progress hint */
+  const progEl = document.getElementById('wheel-bonus-progress');
+  if (progEl) {
+    const n = st.games_to_next_bonus || 0;
+    progEl.textContent = n
+      ? `🎮 Play ${n} more bingo game${n !== 1 ? 's' : ''} → +1 bonus spin (next at ${st.next_bonus_at_games} games)`
+      : `🎮 You earned a bonus spin! (${st.games_played} games played)`;
+    progEl.style.color = bonusR > 0 ? 'var(--amber)' : 'var(--text3)';
+  }
+
+  if (total > 0) {
+    spinBtn.disabled  = false;
+    spinBtn.innerHTML = `🎡 SPIN THE WHEEL <span style="font-size:10px;opacity:.75">(${total} left)</span>`;
+    if (statusMsg) statusMsg.textContent =
+      dailyR > 0 ? `${dailyR} daily spin${dailyR > 1 ? 's' : ''} available` : `${bonusR} bonus spin${bonusR > 1 ? 's' : ''} available`;
   } else {
-    spinBtn.disabled    = false;
-    spinBtn.innerHTML   = '🎡 SPIN THE WHEEL';
-    if (statusMsg) statusMsg.textContent = '1 free spin available today!';
+    spinBtn.disabled    = true;
+    spinBtn.innerHTML   = '🎡 No Spins Available';
+    if (statusMsg) statusMsg.textContent = '';
+    /* show daily reset countdown */
+    if (st.next_daily_reset_ts && _spinCdTimer === null) {
+      startSpinCountdown(st.next_daily_reset_ts, statusMsg);
+    }
     if (resultArea) resultArea.innerHTML = '';
   }
 }
 
 let _spinCdTimer = null;
 function startSpinCountdown(nextTs, el) {
-  if (_spinCdTimer) clearInterval(_spinCdTimer);
+  if (_spinCdTimer) { clearInterval(_spinCdTimer); _spinCdTimer = null; }
   function tick() {
     const diff = Math.max(0, nextTs - Math.floor(Date.now() / 1000));
-    if (!diff) { clearInterval(_spinCdTimer); if (el) el.textContent = 'Spin ready!'; return; }
+    if (!diff) {
+      clearInterval(_spinCdTimer); _spinCdTimer = null;
+      if (el) el.textContent = 'Daily spins ready!';
+      loadWheelStatus();
+      return;
+    }
     const h = Math.floor(diff/3600), m = Math.floor((diff%3600)/60), s = diff%60;
     if (el) el.textContent =
-      `Next spin in ${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+      `Daily spins reset in ${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
   }
   tick();
   _spinCdTimer = setInterval(tick, 1000);
@@ -3468,28 +3512,40 @@ async function doSpin() {
       _spinning = false;
       S.user = { ...S.user, balance: res.new_balance };
       renderHeader();
+
+      const typeLabel = res.spin_type === 'bonus' ? '🎁 Bonus spin' : '🗓️ Daily spin';
       if (resultArea) {
-        if (res.prize > 0) {
-          resultArea.innerHTML = `<div class="wheel-result-badge">🎉 +${res.prize} ETB!</div>`;
-          spawnConfetti();
-          toast(`You won ${res.prize} ETB!`, 'success');
-        } else {
-          resultArea.innerHTML = `<div class="wheel-zero-badge">😅 Better luck tomorrow!</div>`;
-          toast('No prize this time — try again tomorrow', 'info');
-        }
+        resultArea.innerHTML =
+          `<div class="wheel-result-badge">+${res.prize} ETB!</div>`+
+          `<div style="font-size:10px;color:var(--text3);text-align:center;margin-top:4px">${typeLabel}</div>`;
+        spawnConfetti();
+        toast(`+${res.prize} ETB won! (${typeLabel})`, 'success');
       }
-      loadWheelStatus();
+
+      /* update counters inline without a full reload */
+      const totalBadge = document.getElementById('spins-total-badge');
+      const dailyEl    = document.getElementById('spins-daily');
+      const bonusEl    = document.getElementById('spins-bonus');
+      const dailyMax   = res.daily_max || 2;
+      if (totalBadge) totalBadge.textContent = res.total_available;
+      if (dailyEl)    dailyEl.textContent    = `${res.daily_remaining}/${dailyMax}`;
+      if (bonusEl)    bonusEl.textContent    = res.bonus_remaining;
+
+      if (res.total_available > 0) {
+        const spinBtn2 = document.getElementById('spin-btn');
+        if (spinBtn2) {
+          spinBtn2.disabled  = false;
+          spinBtn2.innerHTML = `🎡 SPIN THE WHEEL <span style="font-size:10px;opacity:.75">(${res.total_available} left)</span>`;
+        }
+      } else {
+        loadWheelStatus();   // full refresh to show countdown
+      }
     });
   } catch(e) {
     _spinning = false;
     spinBtn.disabled  = false;
-    spinBtn.innerHTML = '🎡 SPIN THE WHEEL';
-    if (e.message && e.message.toLowerCase().includes('already')) {
-      toast(e.message, 'info');
-      loadWheelStatus();
-    } else {
-      toast(e.message || 'Spin failed', 'error');
-    }
+    loadWheelStatus();  // refresh so counters stay accurate
+    toast(e.message || 'Spin failed', 'error');
   }
 }
 
